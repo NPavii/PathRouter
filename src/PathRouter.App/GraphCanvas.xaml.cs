@@ -15,9 +15,9 @@ namespace PathRouter.App;
 /// <summary>Интерактивный граф маршрутов: панорама, зум, выбор, бейджи обновлений.</summary>
 public sealed partial class GraphCanvas : UserControl
 {
-    private enum NodeKind { Source, Name, Dest, UpdateBadge }
+    private enum NodeKind { Source, Name, Dest, UpdateBadge, RouteToggle, GroupToggle }
 
-    private sealed record NodeHit(Rect Rect, Route Route, RouteDestination? Dest, NodeKind Kind);
+    private sealed record NodeHit(Rect Rect, Route Route, RouteDestination? Dest, NodeKind Kind, string? GroupName = null);
 
     // Геометрия раскладки
     private const float SourceX = 30, SourceW = 270, NodeH = 58;
@@ -52,6 +52,21 @@ public sealed partial class GraphCanvas : UserControl
     public event Action<Route>? RouteSelected;
     public event Action<Route, RouteDestination>? UpdateRequested;
     public event Action<string>? FolderOpenRequested;
+    public event Action<Route>? RouteCollapseToggled;
+    public event Action<string>? GroupCollapseToggled;
+
+    /// <summary>Свёрнутость путей (group_name -> collapsed), задаётся извне после загрузки маршрутов.</summary>
+    private IReadOnlyDictionary<string, bool> _collapsedGroups =
+        new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+    public void SetGroupStates(IReadOnlyDictionary<string, bool> collapsedGroups)
+    {
+        _collapsedGroups = collapsedGroups;
+        Canvas.Invalidate();
+    }
+
+    private bool GroupCollapsed(string? name) =>
+        name is not null && _collapsedGroups.TryGetValue(name, out var c) && c;
 
     public GraphCanvas()
     {
@@ -130,7 +145,9 @@ public sealed partial class GraphCanvas : UserControl
     // ---------- раскладка ----------
 
     /// <summary>Высота стека маршрута: его узел-имя + ветви назначений.</summary>
-    private static float RouteStackH(Route r) => MathF.Max(MinBlockH, r.Destinations.Count * DestRowH + 24);
+    private static float RouteStackH(Route r) => r.IsCollapsed
+        ? 74
+        : MathF.Max(MinBlockH, r.Destinations.Count * DestRowH + 24);
 
     private const float RoutePad = 26;
 
@@ -139,6 +156,18 @@ public sealed partial class GraphCanvas : UserControl
     {
         float stacks = group.Sum(RouteStackH) + (group.Count - 1) * RoutePad;
         return MathF.Max(MinBlockH + 10, stacks);
+    }
+
+    private const float GroupTitleH = 30;
+    private const float PathPad = 12;       // внутренний отступ контура пути
+    private const float CollapsedGroupH = 56;
+
+    /// <summary>Высота блока пути (группы маршрутов с общим контуром).</summary>
+    private static float PathGroupHeight(IReadOnlyList<Route> members)
+    {
+        var clusters = members.GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase).ToList();
+        float inner = clusters.Sum(c => GroupHeight(c.ToList())) + (clusters.Count - 1) * 10;
+        return PathPad + GroupTitleH + inner + PathPad;
     }
 
     private static string SourceKey(Route r) => r.SourcePath.TrimEnd('\\');
@@ -154,17 +183,80 @@ public sealed partial class GraphCanvas : UserControl
 
         // Фоновая сетка (точки) — ограничена шириной контента
         float contentH = 40 * 2;
-        foreach (var g in _routes.GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
+        foreach (var g in _routes.Where(r => !string.IsNullOrEmpty(r.GroupName))
+                                 .GroupBy(r => r.GroupName!, StringComparer.OrdinalIgnoreCase))
+            contentH += (GroupCollapsed(g.Key) ? CollapsedGroupH : PathGroupHeight(g.ToList())) + BlockPad;
+        foreach (var g in _routes.Where(r => string.IsNullOrEmpty(r.GroupName))
+                                 .GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
             contentH += GroupHeight(g.ToList()) + BlockPad;
         for (float gx = 0; gx < DestX + DestW + 120; gx += 40)
             for (float gy = 0; gy < contentH; gy += 40)
                 ds.FillCircle(gx, gy, 1.2f, GridDot);
 
-        foreach (var g in _routes.GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
+        // --- Пути (объединённые группы маршрутов) ---
+        foreach (var g in _routes.Where(r => !string.IsNullOrEmpty(r.GroupName))
+                                 .GroupBy(r => r.GroupName!, StringComparer.OrdinalIgnoreCase)
+                                 .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var members = g.ToList();
+            if (GroupCollapsed(g.Key))
+            {
+                DrawCollapsedGroup(ds, g.Key, members, y);
+                y += CollapsedGroupH + BlockPad;
+            }
+            else
+            {
+                DrawPathContour(ds, g.Key, members, y);
+                y += PathGroupHeight(members) + BlockPad;
+            }
+        }
+
+        // --- Обычные маршруты, сгруппированные по общему источнику ---
+        foreach (var g in _routes.Where(r => string.IsNullOrEmpty(r.GroupName))
+                                 .GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
         {
             var group = g.ToList();
             DrawGroup(ds, group, y);
             y += GroupHeight(group) + BlockPad;
+        }
+    }
+
+    /// <summary>Свёрнутый путь: одна компактная плашка с названием и счётчиком.</summary>
+    private void DrawCollapsedGroup(CanvasDrawingSession ds, string name, List<Route> members, float y)
+    {
+        int withUpdates = members.Count(r => r.HasUpdates);
+        byte alpha = members.All(r => r.IsArchived) ? (byte)110 : (byte)255;
+        float w = DestX + DestW + 16 - (SourceX - 16);
+        var rect = new Rect(SourceX - 16, y, w, CollapsedGroupH - 14);
+
+        ds.FillRoundedRectangle(rect, 12, 12, WithAlpha(Color.FromArgb(255, 237, 240, 250), alpha));
+        ds.DrawRoundedRectangle(rect, 12, 12, WithAlpha(Color.FromArgb(255, 150, 165, 220), alpha), 1.5f);
+        string text = $"▸  {Shorten(name, 44)}  —  {members.Count} {(members.Count == 1 ? "маршрут" : "маршрута")}";
+        if (withUpdates > 0) text += $"  •  обновлений: {withUpdates}";
+        ds.DrawTextLayout(Text(text, _fmtTitle!, w - 40), SourceX, y + 12,
+                          WithAlpha(Color.FromArgb(255, 60, 70, 110), alpha));
+        _hits.Add(new NodeHit(rect, members[0], null, NodeKind.GroupToggle, name));
+    }
+
+    /// <summary>Контур пути: общая рамка с названием, внутри — обычные блоки по источникам.</summary>
+    private void DrawPathContour(CanvasDrawingSession ds, string name, List<Route> members, float y)
+    {
+        float h = PathGroupHeight(members);
+        float x = SourceX - 16, w = DestX + DestW + 16 - x;
+
+        ds.FillRoundedRectangle(new Rect(x, y, w, h), 14, 14, Color.FromArgb(255, 242, 245, 255));
+        ds.DrawRoundedRectangle(new Rect(x, y, w, h), 14, 14, Accent, 2f);
+
+        // заголовок пути + зона клика для сворачивания
+        ds.DrawTextLayout(Text($"▼  {Shorten(name, 50)}", _fmtTitle!, w - 40), SourceX, y + 8, AccentDark);
+        _hits.Add(new NodeHit(new Rect(x, y, w, GroupTitleH + 2), members[0], null, NodeKind.GroupToggle, name));
+
+        float inner = y + PathPad + GroupTitleH;
+        foreach (var cluster in members.GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
+        {
+            var group = cluster.ToList();
+            DrawGroup(ds, group, inner);
+            inner += GroupHeight(group) + 10;
         }
     }
 
@@ -226,7 +318,8 @@ public sealed partial class GraphCanvas : UserControl
         }
     }
 
-    /// <summary>Один маршрут: узел-название посередине и его ветви назначений справа.</summary>
+    /// <summary>Один маршрут: узел-название посередине и его ветви назначений справа.
+    /// Свёрнутый маршрут рисуется только узлом-названием с маркером ▸.</summary>
     private void DrawRouteStack(CanvasDrawingSession ds, Route route, float nameCy, float stackY, float stackH,
                                 bool sourceMissing, byte alpha)
     {
@@ -238,12 +331,32 @@ public sealed partial class GraphCanvas : UserControl
         var nameRect = new Rect(NameX, nameY, NameW, NodeH + 8);
         ds.FillRoundedRectangle(nameRect, 10, 10, WithAlpha(nameFill, alpha));
         ds.DrawRoundedRectangle(nameRect, 10, 10, WithAlpha(selected ? AccentDark : nameFill, alpha), selected ? 2.5f : 1f);
+
+        if (route.IsCollapsed)
+        {
+            ds.DrawTextLayout(Text("▸ " + Shorten(route.Name, 26), _fmtTitle!, NameW - 40), NameX + 12, nameY + 12,
+                              Color.FromArgb(alpha, 255, 255, 255));
+            string sub = sourceMissing ? "источник не найден"
+                       : $"свёрнут • {route.Destinations.Count} {(route.Destinations.Count == 1 ? "папка" : "папки")}"
+                         + (route.HasUpdates ? " • есть обновления" : "");
+            ds.DrawTextLayout(Text(sub, _fmtBadge!, NameW - 24), NameX + 12, nameY + 34,
+                              Color.FromArgb((byte)(alpha == 255 ? 200 : 110), 255, 255, 255));
+            _hits.Add(new NodeHit(nameRect, route, null, NodeKind.Name));
+
+            // шеврон сворачивания/разворачивания у правого края узла
+            var tgl = new Rect(NameX + NameW - 26, nameY + 10, 22, NodeH - 4);
+            ds.DrawTextLayout(Text("–", _fmtGlyph!, 20), NameX + NameW - 21, nameY + 14,
+                              Color.FromArgb(alpha, 255, 255, 255));
+            _hits.Add(new NodeHit(tgl, route, null, NodeKind.RouteToggle));
+            return;
+        }
+
         ds.DrawTextLayout(Text(Shorten(route.Name, 30), _fmtTitle!, NameW - 24), NameX + 12, nameY + 12, Color.FromArgb(alpha, 255, 255, 255));
-        string sub = sourceMissing ? "источник не найден"
+        string sub2 = sourceMissing ? "источник не найден"
                    : route.Destinations.Count == 0 ? "нет ветвей"
                    : $"{route.Destinations.Count} {(route.Destinations.Count == 1 ? "папка" : "папки")}";
-        if (!sourceMissing && route.HasUpdates) sub += "  •  есть обновления";
-        ds.DrawTextLayout(Text(sub, _fmtBadge!, NameW - 24), NameX + 12, nameY + 34, Color.FromArgb((byte)(alpha == 255 ? 200 : 110), 255, 255, 255));
+        if (!sourceMissing && route.HasUpdates) sub2 += "  •  есть обновления";
+        ds.DrawTextLayout(Text(sub2, _fmtBadge!, NameW - 24), NameX + 12, nameY + 34, Color.FromArgb((byte)(alpha == 255 ? 200 : 110), 255, 255, 255));
         _hits.Add(new NodeHit(nameRect, route, null, NodeKind.Name));
 
         // --- назначения ---
@@ -253,6 +366,12 @@ public sealed partial class GraphCanvas : UserControl
             ds.DrawTextLayout(Text("— нет ветвей —", _fmtPath!, 160), DestX, nameCy - 8, WithAlpha(TextGray, alpha));
             return;
         }
+
+        // шеврон сворачивания маршрута
+        var toggle = new Rect(NameX + NameW - 26, nameY + 10, 22, NodeH - 4);
+        ds.DrawTextLayout(Text("▾", _fmtGlyph!, 20), NameX + NameW - 21, nameY + 14,
+                          Color.FromArgb((byte)(alpha == 255 ? 220 : 110), 255, 255, 255));
+        _hits.Add(new NodeHit(toggle, route, null, NodeKind.RouteToggle));
 
         float destTop = nameCy - (route.Destinations.Count * DestRowH) / 2 + DestRowH / 2;
         for (int i = 0; i < route.Destinations.Count; i++)
@@ -352,15 +471,22 @@ public sealed partial class GraphCanvas : UserControl
         var hit = HitTest(pos);
         if (hit is not null)
         {
-            if (hit.Kind == NodeKind.UpdateBadge)
+            switch (hit.Kind)
             {
-                UpdateRequested?.Invoke(hit.Route, hit.Dest!);
-            }
-            else
-            {
-                SelectedRoute = hit.Route;
-                RouteSelected?.Invoke(hit.Route);
-                Canvas.Invalidate();
+                case NodeKind.UpdateBadge:
+                    UpdateRequested?.Invoke(hit.Route, hit.Dest!);
+                    break;
+                case NodeKind.RouteToggle:
+                    RouteCollapseToggled?.Invoke(hit.Route);
+                    break;
+                case NodeKind.GroupToggle:
+                    GroupCollapseToggled?.Invoke(hit.GroupName ?? string.Empty);
+                    break;
+                default:
+                    SelectedRoute = hit.Route;
+                    RouteSelected?.Invoke(hit.Route);
+                    Canvas.Invalidate();
+                    break;
             }
             return;
         }

@@ -10,6 +10,8 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
             <local:BoolToVisConverter x:Key="BoolToVisibilityConverter" />
+            <local:NonEmptyStringToVisConverter x:Key="NonEmptyToVis" />
+            <local:CollapseTextConverter x:Key="CollapseText" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

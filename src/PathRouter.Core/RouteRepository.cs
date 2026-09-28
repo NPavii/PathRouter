@@ -56,7 +56,33 @@ public sealed class RouteRepository : IDisposable
             );
             CREATE INDEX IF NOT EXISTS idx_manifest_dest ON manifest(destination_id);
             CREATE INDEX IF NOT EXISTS idx_manifest_rel ON manifest(rel_path);
+            CREATE TABLE IF NOT EXISTS route_groups(
+                name TEXT PRIMARY KEY,
+                is_collapsed INTEGER NOT NULL DEFAULT 0
+            );
             """;
+        cmd.ExecuteNonQuery();
+
+        // Миграции: добавляем колонки к существующим БД (ALTER TABLE ... IF NOT EXISTS нет в SQLite)
+        AddColumnIfMissing("routes", "group_name", "ALTER TABLE routes ADD COLUMN group_name TEXT");
+        AddColumnIfMissing("routes", "is_collapsed", "ALTER TABLE routes ADD COLUMN is_collapsed INTEGER NOT NULL DEFAULT 0");
+    }
+
+    private bool HasColumn(string table, string column)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({table});";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private void AddColumnIfMissing(string table, string column, string alterSql)
+    {
+        if (HasColumn(table, column)) return;
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = alterSql;
         cmd.ExecuteNonQuery();
     }
 
@@ -67,11 +93,11 @@ public sealed class RouteRepository : IDisposable
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, source_path, created_utc, is_archived, is_hidden
+            SELECT id, name, source_path, created_utc, is_archived, is_hidden, group_name, is_collapsed
             FROM routes
             WHERE (@incArch = 1 OR is_archived = 0)
               AND (@incHidden = 1 OR is_hidden = 0)
-            ORDER BY created_utc;
+            ORDER BY group_name, created_utc;
             """;
         cmd.Parameters.AddWithValue("@incArch", includeArchived ? 1 : 0);
         cmd.Parameters.AddWithValue("@incHidden", includeHidden ? 1 : 0);
@@ -87,7 +113,9 @@ public sealed class RouteRepository : IDisposable
                 SourcePath = reader.GetString(2),
                 CreatedUtc = DateTime.Parse(reader.GetString(3)),
                 IsArchived = reader.GetInt64(4) != 0,
-                IsHidden = reader.GetInt64(5) != 0
+                IsHidden = reader.GetInt64(5) != 0,
+                GroupName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                IsCollapsed = reader.GetInt64(7) != 0
             });
         }
 
@@ -167,6 +195,129 @@ public sealed class RouteRepository : IDisposable
         cmd.CommandText = "DELETE FROM destinations WHERE id=$id;";
         cmd.Parameters.AddWithValue("$id", destinationId);
         cmd.ExecuteNonQuery();
+    }
+
+    // ---------- Пути (группы маршрутов) ----------
+
+    /// <summary>Все пути и их состояние свёрнутости.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public List<RouteGroupInfo> GetGroups()
+    {
+        // Подтягиваем и группы, у которых есть маршруты, но нет строки состояния
+        using var sync = _connection.CreateCommand();
+        sync.CommandText = """
+            INSERT OR IGNORE INTO route_groups(name, is_collapsed)
+            SELECT DISTINCT group_name, 0 FROM routes WHERE group_name IS NOT NULL;
+            """;
+        sync.ExecuteNonQuery();
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT name, is_collapsed FROM route_groups ORDER BY name;";
+        var list = new List<RouteGroupInfo>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            list.Add(new RouteGroupInfo { Name = reader.GetString(0), IsCollapsed = reader.GetInt64(1) != 0 });
+        return list;
+    }
+
+    /// <summary>Объединяет маршруты в путь (группу) с заданным названием.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SetGroup(IEnumerable<string> routeIds, string groupName)
+    {
+        using var tx = _connection.BeginTransaction();
+        using (var g = _connection.CreateCommand())
+        {
+            g.Transaction = tx;
+            g.CommandText = "INSERT OR IGNORE INTO route_groups(name, is_collapsed) VALUES($n, 0);";
+            g.Parameters.AddWithValue("$n", groupName);
+            g.ExecuteNonQuery();
+        }
+        foreach (var id in routeIds)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "UPDATE routes SET group_name=$g WHERE id=$id;";
+            cmd.Parameters.AddWithValue("$g", groupName);
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+        CleanupEmptyGroups();
+    }
+
+    /// <summary>Убирает маршруты из путей (group_name = NULL).</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void Ungroup(IEnumerable<string> routeIds)
+    {
+        foreach (var id in routeIds)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "UPDATE routes SET group_name=NULL WHERE id=$id;";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.ExecuteNonQuery();
+        }
+        CleanupEmptyGroups();
+    }
+
+    private void CleanupEmptyGroups()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM route_groups
+            WHERE NOT EXISTS (SELECT 1 FROM routes WHERE routes.group_name = route_groups.name);
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Сворачивание/разворачивание одного маршрута на графе.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SetRouteCollapsed(string routeId, bool collapsed)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "UPDATE routes SET is_collapsed=$v WHERE id=$id;";
+        cmd.Parameters.AddWithValue("$v", collapsed ? 1 : 0);
+        cmd.Parameters.AddWithValue("$id", routeId);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Сворачивание/разворачивание целого пути.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SetGroupCollapsed(string groupName, bool collapsed)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO route_groups(name, is_collapsed) VALUES($n, $v)
+            ON CONFLICT(name) DO UPDATE SET is_collapsed=$v;
+            """;
+        cmd.Parameters.AddWithValue("$n", groupName);
+        cmd.Parameters.AddWithValue("$v", collapsed ? 1 : 0);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Сброс WAL-журнала в основной файл — перед копированием БД (экспорт).</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void Checkpoint()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Проверяет, что файл — база Каравана (нужные таблицы на месте).</summary>
+    public static bool IsValidDatabase(string path)
+    {
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('routes','destinations','manifest');";
+            return Convert.ToInt32(cmd.ExecuteScalar()) == 3;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // ---------- Назначения ----------

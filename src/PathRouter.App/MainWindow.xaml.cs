@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using PathRouter.Core;
 using System.Collections.Generic;
@@ -10,8 +11,8 @@ namespace PathRouter.App;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly RouteRepository _repo;
-    private readonly RouteService _svc;
+    private RouteRepository _repo;
+    private RouteService _svc;
 
     // Полный список маршрутов (включая архивные/скрытые) — для watcher'ов и фоновой проверки.
     // Фильтрованный список для отображения — _routes.
@@ -43,6 +44,8 @@ public sealed partial class MainWindow : Window
         Graph.RouteSelected += OnGraphRouteSelected;
         Graph.UpdateRequested += OnGraphUpdateRequested;
         Graph.FolderOpenRequested += OpenFolder;
+        Graph.RouteCollapseToggled += OnGraphRouteCollapse;
+        Graph.GroupCollapseToggled += name => ToggleGroup(name);
 
         DropZone.DragOver += OnDropZoneDragOver;
         DropZone.Drop += OnDropZoneDrop;
@@ -88,8 +91,34 @@ public sealed partial class MainWindow : Window
                                   || r.SourcePath.Contains(filter, StringComparison.OrdinalIgnoreCase));
 
         _routes = query.ToList();
-        RoutesList.ItemsSource = null;
-        RoutesList.ItemsSource = _routes;
+
+        // Состояние путей (свёрнутость) — на граф и в группировку списка
+        var groupStates = _repo.GetGroups()
+            .ToDictionary(g => g.Name, g => g.IsCollapsed, StringComparer.OrdinalIgnoreCase);
+        Graph.SetGroupStates(groupStates);
+
+        // Группировка списка: пути — с заголовками, развёрнутые показывают маршруты,
+        // свёрнутые показывают только заголовок; без пути — каждый маршрут отдельно.
+        var view = new List<RouteGroupView>();
+        foreach (var g in _routes.Where(r => !string.IsNullOrEmpty(r.GroupName))
+                                 .GroupBy(r => r.GroupName!, StringComparer.OrdinalIgnoreCase)
+                                 .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            bool collapsed = groupStates.TryGetValue(g.Key, out var c) && c;
+            var vg = new RouteGroupView { Key = g.Key, IsCollapsed = collapsed };
+            if (!collapsed) vg.AddRange(g);
+            view.Add(vg);
+        }
+        foreach (var r in _routes.Where(r => string.IsNullOrEmpty(r.GroupName)))
+        {
+            var single = new RouteGroupView { Key = "" };
+            single.Add(r);
+            view.Add(single);
+        }
+
+        var cvs = new CollectionViewSource { IsSourceGrouped = true, Source = view };
+        RoutesList.ItemsSource = cvs.View;
+
         Graph.SetRoutes(_routes);
 
         if (_selectedRoute is not null)
@@ -185,12 +214,8 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { App.LogError("RunSilentSweep", ex); }
     }
 
-    /// <summary>Обновляет иконки статуса в списке без полной перезагрузки данных.</summary>
-    private void RefreshListIcons()
-    {
-        RoutesList.ItemsSource = null;
-        RoutesList.ItemsSource = _routes;
-    }
+    /// <summary>Обновляет иконки статуса в списке (пересобирает сгруппированное представление).</summary>
+    private void RefreshListIcons() => LoadRoutes();
 
     private void UpdateSelectionUi()
     {
@@ -470,8 +495,7 @@ public sealed partial class MainWindow : Window
                     _svc.CheckRoute(route);
             });
             Graph.InvalidateGraph();
-            RoutesList.ItemsSource = null;
-            RoutesList.ItemsSource = _routes;
+            LoadRoutes();
             int withUpdates = routes.Count(r => r.HasUpdates);
             if (!silent)
                 Status(withUpdates == 0 ? "Все маршруты актуальны." : $"Обновления доступны: {withUpdates} маршрут(ов).");
@@ -603,5 +627,225 @@ public sealed partial class MainWindow : Window
     {
         if ((e.OriginalSource as FrameworkElement)?.DataContext is FileHit hit)
             OpenFolder(hit.DestPath);
+    }
+
+    // ---------- пути (группы), сворачивание ----------
+
+    private List<Route> SelectedRoutes =>
+        RoutesList.SelectedItems.OfType<Route>().ToList();
+
+    private void OnRoutesRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        // ПКМ по невыделенному элементу выделяет его (многоэлементный выбор — Ctrl/Shift + клик)
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is Route r
+            && !RoutesList.SelectedItems.Contains(r))
+            RoutesList.SelectedItem = r;
+    }
+
+    private void OnRouteMenuOpening(object sender, object e)
+    {
+        var selected = SelectedRoutes;
+        var single = selected.Count == 1 ? selected[0] : null;
+        MergeMenuItem.IsEnabled = selected.Count >= 2;
+        CollapseRouteItem.IsEnabled = single is not null;
+        CollapseRouteItem.Text = single?.IsCollapsed == true ? "Развернуть маршрут" : "Свернуть маршрут";
+        var inGroup = selected.Where(r => r.GroupName is not null).ToList();
+        CollapseGroupItem.IsEnabled = inGroup.Count > 0;
+        CollapseGroupItem.Text = inGroup.Any(r => GroupCollapsed(r.GroupName!)) ? "Развернуть путь" : "Свернуть путь";
+        UngroupItem.IsEnabled = inGroup.Count > 0;
+    }
+
+    private bool GroupCollapsed(string groupName)
+    {
+        var g = _repo.GetGroups().FirstOrDefault(x => string.Equals(x.Name, groupName, StringComparison.OrdinalIgnoreCase));
+        return g?.IsCollapsed == true;
+    }
+
+    private void ToggleGroup(string groupName)
+    {
+        _repo.SetGroupCollapsed(groupName, !GroupCollapsed(groupName));
+        LoadRoutes();
+    }
+
+    private void OnGraphRouteCollapse(Route route)
+    {
+        route.IsCollapsed = !route.IsCollapsed;
+        _repo.SetRouteCollapsed(route.Id, route.IsCollapsed);
+        LoadRoutes();
+    }
+
+    private async void OnMergeRoutes(object sender, RoutedEventArgs e)
+    {
+        var selected = SelectedRoutes;
+        if (selected.Count < 2)
+        {
+            Status("Выберите несколько маршрутов (Ctrl/Shift + клик), затем «Объединить в путь…».");
+            return;
+        }
+        var box = new TextBox { Text = selected[0].GroupName ?? string.Empty, Width = 320 };
+        var dialog = new ContentDialog
+        {
+            Title = $"Объединить {selected.Count} маршрутов в путь",
+            Content = new StackPanel { Spacing = 8 }.Also(p =>
+            {
+                p.Children.Add(new TextBlock { Text = "Название пути (напр. «А» — маршруты станут А.1, А.2…):", TextWrapping = TextWrapping.Wrap });
+                p.Children.Add(box);
+            }),
+            PrimaryButtonText = "Объединить",
+            CloseButtonText = "Отмена",
+            XamlRoot = Content.XamlRoot,
+            DefaultButton = ContentDialogButton.Primary
+        };
+        box.SelectAll();
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var name = box.Text.Trim();
+        if (name.Length == 0) return;
+        _repo.SetGroup(selected.Select(r => r.Id), name);
+        LoadRoutes();
+        Status($"Объединено в путь «{name}»: {selected.Count} маршрутов.");
+    }
+
+    private void OnToggleRouteCollapse(object sender, RoutedEventArgs e)
+    {
+        var single = SelectedRoutes.FirstOrDefault();
+        if (single is null) return;
+        OnGraphRouteCollapse(single);
+    }
+
+    private void OnToggleGroupCollapse(object sender, RoutedEventArgs e)
+    {
+        var route = SelectedRoutes.FirstOrDefault(r => r.GroupName is not null);
+        if (route?.GroupName is not null) ToggleGroup(route.GroupName);
+    }
+
+    private void OnUngroupSelected(object sender, RoutedEventArgs e)
+    {
+        var ids = SelectedRoutes.Where(r => r.GroupName is not null).Select(r => r.Id).ToList();
+        if (ids.Count == 0) return;
+        _repo.Ungroup(ids);
+        LoadRoutes();
+        Status("Маршруты убраны из пути.");
+    }
+
+    private void OnGroupHeaderCollapse(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is RouteGroupView g && !string.IsNullOrEmpty(g.Key))
+            ToggleGroup(g.Key);
+    }
+
+    private void OnGroupHeaderUngroup(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not RouteGroupView g || string.IsNullOrEmpty(g.Key)) return;
+        var ids = _allRoutes.Where(r => string.Equals(r.GroupName, g.Key, StringComparison.OrdinalIgnoreCase))
+                            .Select(r => r.Id).ToList();
+        if (ids.Count == 0) return;
+        _repo.Ungroup(ids);
+        LoadRoutes();
+        Status($"Путь «{g.Key}» расформирован.");
+    }
+
+    // ---------- импорт / экспорт базы ----------
+
+    private async void OnExportDb(object sender, RoutedEventArgs e)
+    {
+        SetBusy(true, "Экспортирую базу…");
+        try
+        {
+            var picker = new FileSavePicker();
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+            picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+            picker.FileTypeChoices.Add("База данных Каравана", new List<string> { ".db" });
+            picker.SuggestedFileName = "karavan-routes";
+            var file = await picker.PickSaveFileAsync();
+            if (file is null) { SetBusy(false); return; }
+
+            await Task.Run(() =>
+            {
+                _repo.Checkpoint(); // дожать WAL в основной файл перед копированием
+                File.Copy(RouteRepository.DefaultDbPath, file.Path, overwrite: true);
+            });
+            Status($"База экспортирована: {file.Path}");
+        }
+        catch (Exception ex) { ShowError(ex); }
+        finally { SetBusy(false); }
+    }
+
+    private async void OnImportDb(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileOpenPicker();
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+            picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+            picker.FileTypeFilter.Add(".db");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null) return;
+
+            if (!RouteRepository.IsValidDatabase(file.Path))
+            {
+                ShowError(new InvalidDataException("Выбранный файл не является базой Каравана (нет таблиц routes/destinations/manifest)."));
+                return;
+            }
+
+            var confirm = new ContentDialog
+            {
+                Title = "Импорт базы",
+                Content = "Текущие маршруты будут полностью заменены содержимым выбранного файла. Файлы на диске не пострадают. Продолжить?",
+                PrimaryButtonText = "Импортировать",
+                CloseButtonText = "Отмена",
+                XamlRoot = Content.XamlRoot,
+                DefaultButton = ContentDialogButton.Close
+            };
+            if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+            SetBusy(true, "Импортирую базу…");
+            string? error = null;
+            await Task.Run(() =>
+            {
+                try
+                {
+                    foreach (var w in _watchers.Values) { try { w.EnableRaisingEvents = false; w.Dispose(); } catch { } }
+                    _watchers.Clear();
+                    lock (_dirtyLock) _dirtyRouteIds.Clear();
+                    _repo.Dispose();
+                    File.Copy(file.Path, RouteRepository.DefaultDbPath, overwrite: true);
+                    _repo = new RouteRepository();
+                    _svc = new RouteService(_repo);
+                }
+                catch (Exception ex) { error = ex.Message; }
+            });
+            if (error is not null)
+            {
+                ShowError(new IOException("Импорт не удался: " + error));
+                return;
+            }
+            _selectedRoute = null;
+            LoadRoutes();
+            _ = CheckAllUpdatesAsync(silent: true);
+            Status("База импортирована.");
+        }
+        catch (Exception ex) { ShowError(ex); }
+        finally { SetBusy(false); }
+    }
+}
+
+/// <summary>Группа маршрутов для отображения: Key — название пути, сама группа — список маршрутов.
+/// Пустой Key означает «без пути» (заголовок скрывается конвертером).</summary>
+public sealed class RouteGroupView : List<Route>
+{
+    public string Key { get; set; } = string.Empty;
+    public bool IsCollapsed { get; set; }
+}
+
+/// <summary>Мини-хелпер для конструирования UI в коде.</summary>
+internal static class UiHelpers
+{
+    public static T Also<T>(this T self, Action<T> block) where T : notnull
+    {
+        block(self);
+        return self;
     }
 }

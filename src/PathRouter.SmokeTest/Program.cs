@@ -208,6 +208,39 @@ try
     MoveWithRetry(source + "_gone", source);
     repo.DeleteRoute(route3.Id);
 
+    // --- Пути (группы): объединение, коллапс, разгруппировка ---
+    var r1 = repo.InsertRoute("Маршрут 1", source);
+    var r2 = repo.InsertRoute("Маршрут 2", source);
+    var r3 = repo.InsertRoute("Маршрут 3", source);
+    repo.SetGroup(new[] { r1.Id, r2.Id }, "Путь А");
+    var grouped = repo.GetRoutes(true, true).ToDictionary(r => r.Id);
+    Check(grouped[r1.Id].GroupName == "Путь А" && grouped[r2.Id].GroupName == "Путь А",
+        "SetGroup: маршруты объединены в путь");
+    Check(grouped[r3.Id].GroupName is null, "SetGroup: посторонний маршрут не в группе");
+    Check(repo.GetGroups().Any(g => g.Name == "Путь А" && !g.IsCollapsed), "GetGroups: путь появился, не свёрнут");
+
+    repo.SetRouteCollapsed(r1.Id, true);
+    Check(repo.GetRoutes(true, true).First(r => r.Id == r1.Id).IsCollapsed,
+        "SetRouteCollapsed: флаг свёрнутости сохранился");
+    repo.SetGroupCollapsed("Путь А", true);
+    Check(repo.GetGroups().First(g => g.Name == "Путь А").IsCollapsed, "SetGroupCollapsed: путь свёрнут");
+    repo.SetGroupCollapsed("Путь А", false);
+    Check(!repo.GetGroups().First(g => g.Name == "Путь А").IsCollapsed, "SetGroupCollapsed: путь развёрнут");
+
+    repo.Ungroup(new[] { r1.Id, r2.Id });
+    var after = repo.GetRoutes(true, true).ToDictionary(r => r.Id);
+    Check(after[r1.Id].GroupName is null && after[r2.Id].GroupName is null, "Ungroup: маршруты вышли из пути");
+    Check(repo.GetGroups().All(g => g.Name != "Путь А"), "Ungroup: пустой путь удалён из справочника");
+    repo.DeleteRoute(r1.Id); repo.DeleteRoute(r2.Id); repo.DeleteRoute(r3.Id);
+
+    // --- Экспорт/импорт: валидация файла базы ---
+    Check(RouteRepository.IsValidDatabase(db), "IsValidDatabase: своя БД — валидна");
+    var garbage = Path.Combine(root, "not_a_db.db");
+    File.WriteAllText(garbage, "это не база данных");
+    Check(!RouteRepository.IsValidDatabase(garbage), "IsValidDatabase: мусор отклонён");
+    repo.Checkpoint();
+    Check(File.Exists(db), "Checkpoint отрабатывает");
+
     // --- производительность: 500 маршрутов ---
     var sw = System.Diagnostics.Stopwatch.StartNew();
     for (int i = 0; i < 500; i++)

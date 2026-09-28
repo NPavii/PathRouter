@@ -42,6 +42,12 @@ public sealed class Route
     public bool IsArchived { get; set; }
     public bool IsHidden { get; set; }
 
+    /// <summary>Имя пути (группы), в который объединён маршрут. Null — без группы.</summary>
+    public string? GroupName { get; set; }
+
+    /// <summary>Свёрнут на графе: виден только узел-название.</summary>
+    public bool IsCollapsed { get; set; }
+
     public List<RouteDestination> Destinations { get; } = new();
 
     /// <summary>Есть ли отличия между источником и хотя бы одним назначением.</summary>
@@ -84,4 +90,11 @@ public sealed class FileHit
 
     /// <summary>Имя файла (последний сегмент относительного пути).</summary>
     public string FileName => RelPath.Replace('\\', '/').Split('/').Last();
+}
+
+/// <summary>Путь (группа объединённых маршрутов) и его состояние.</summary>
+public sealed class RouteGroupInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public bool IsCollapsed { get; set; }
 }
