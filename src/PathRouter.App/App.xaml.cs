@@ -36,17 +36,17 @@ public partial class App : Application
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
 
-        // Иконка окна (заголовок, панель задач): грузим app.ico из папки приложения.
-        // Загрузка из ресурсов exe (LoadImage с MAKEINTRESOURCE) на части конфигураций
-        // WinApp SDK возвращает ноль — файл надёжнее.
+        // Иконка окна (заголовок, панель задач). LoadImage на этой системе не работает
+        // (даже с системными .ico) — берём иконку через PrivateExtractIcons, это надёжный путь.
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "app.ico");
         if (System.IO.File.Exists(iconPath))
         {
-            const uint LR_LOADFROMFILE = 0x0002;
-            var small = LoadImage(IntPtr.Zero, iconPath, 1, 32, 32, LR_LOADFROMFILE);
-            var big = LoadImage(IntPtr.Zero, iconPath, 1, 256, 256, LR_LOADFROMFILE);
-            if (small != IntPtr.Zero) SendMessage(hwnd, 0x0080, IntPtr.Zero, small);
-            if (big != IntPtr.Zero) SendMessage(hwnd, 0x0080, new IntPtr(1), big);
+            var small = new IntPtr[1];
+            var big = new IntPtr[1];
+            PrivateExtractIcons(iconPath, 0, 32, 32, small, null, 1, 0);
+            PrivateExtractIcons(iconPath, 0, 256, 256, big, null, 1, 0);
+            if (small[0] != IntPtr.Zero) SendMessage(hwnd, 0x0080, IntPtr.Zero, small[0]);
+            if (big[0] != IntPtr.Zero) SendMessage(hwnd, 0x0080, new IntPtr(1), big[0]);
         }
 
         // Размер выставляем отложенно: платформа может сбрасывать геометрию после первого layout
@@ -65,7 +65,10 @@ public partial class App : Application
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-    private static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);
+    private static extern uint PrivateExtractIcons(string szFileName, int nIconIndex, int cxIcon, int cyIcon,
+        [System.Runtime.InteropServices.Out] IntPtr[]? phicon,
+        [System.Runtime.InteropServices.Out] uint[]? piconid,
+        uint nIcons, uint flags);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);

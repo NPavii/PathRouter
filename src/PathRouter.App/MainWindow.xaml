@@ -26,7 +26,7 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <ScrollViewer Grid.Row="0" Padding="14">
+            <ScrollViewer Grid.Row="0" Padding="14" MaxHeight="360">
                 <StackPanel Spacing="10">
                     <TextBlock Text="Новый маршрут" FontSize="18" FontWeight="SemiBold" />
 
@@ -146,15 +146,16 @@
                         <TextBlock x:Name="SelectedRouteTitle" Text="Маршрут не выбран" FontSize="12" FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis" />
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Button Content="Положить в новую папку" Click="OnAddDestination" />
-                            <Button Content="Обновить все" Click="OnUpdateAll" />
-                            <Button Content="Открыть источник" Click="OnOpenSource" />
+                            <Button Content="В новую папку…" Click="OnAddDestination" FontSize="11.5" Padding="6,4" />
+                            <Button Content="Обновить все" Click="OnUpdateAll" FontSize="11.5" Padding="6,4" />
+                            <Button Content="Открыть источник" Click="OnOpenSource" FontSize="11.5" Padding="6,4" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Button Content="Переименовать" Click="OnRename" />
-                            <Button x:Name="ArchiveButton" Content="Архивировать" Click="OnToggleArchive" />
-                            <Button x:Name="HideButton" Content="Скрыть" Click="OnToggleHide" />
-                            <Button Content="Удалить" Click="OnDelete" Background="#C42B1C" Foreground="White" />
+                            <Button Content="Переименовать" Click="OnRename" FontSize="11.5" Padding="6,4" />
+                            <Button x:Name="ArchiveButton" Content="Архивировать" Click="OnToggleArchive" FontSize="11.5" Padding="6,4" />
+                            <Button x:Name="HideButton" Content="Скрыть" Click="OnToggleHide" FontSize="11.5" Padding="6,4" />
+                            <Button Content="Удалить" Click="OnDelete" FontSize="11.5" Padding="6,4"
+                                    Background="#C42B1C" Foreground="White" />
                         </StackPanel>
                     </StackPanel>
                 </ContentControl>
