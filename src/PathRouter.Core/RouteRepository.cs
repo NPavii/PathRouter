@@ -66,6 +66,7 @@ public sealed class RouteRepository : IDisposable
         // Миграции: добавляем колонки к существующим БД (ALTER TABLE ... IF NOT EXISTS нет в SQLite)
         AddColumnIfMissing("routes", "group_name", "ALTER TABLE routes ADD COLUMN group_name TEXT");
         AddColumnIfMissing("routes", "is_collapsed", "ALTER TABLE routes ADD COLUMN is_collapsed INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing("destinations", "is_conserved", "ALTER TABLE destinations ADD COLUMN is_conserved INTEGER NOT NULL DEFAULT 0");
     }
 
     private bool HasColumn(string table, string column)
@@ -294,6 +295,17 @@ public sealed class RouteRepository : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Консервация/вскрытие ветви: проверка целостности и синхронизация вкл/выкл.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SetConserved(string destinationId, bool conserved)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "UPDATE destinations SET is_conserved=$v WHERE id=$id;";
+        cmd.Parameters.AddWithValue("$v", conserved ? 1 : 0);
+        cmd.Parameters.AddWithValue("$id", destinationId);
+        cmd.ExecuteNonQuery();
+    }
+
     /// <summary>Сброс WAL-журнала в основной файл — перед копированием БД (экспорт).</summary>
     [MethodImpl(MethodImplOptions.Synchronized)]
     public void Checkpoint()
@@ -327,7 +339,7 @@ public sealed class RouteRepository : IDisposable
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
-            SELECT id, route_id, dest_path, order_index, created_utc, last_sync_utc
+            SELECT id, route_id, dest_path, order_index, created_utc, last_sync_utc, is_conserved
             FROM destinations WHERE route_id=$rid ORDER BY order_index, created_utc;
             """;
         cmd.Parameters.AddWithValue("$rid", routeId);
@@ -343,7 +355,8 @@ public sealed class RouteRepository : IDisposable
                 DestPath = reader.GetString(2),
                 OrderIndex = (int)reader.GetInt64(3),
                 CreatedUtc = DateTime.Parse(reader.GetString(4)),
-                LastSyncUtc = DateTime.Parse(reader.GetString(5))
+                LastSyncUtc = DateTime.Parse(reader.GetString(5)),
+                IsConserved = reader.GetInt64(6) != 0
             });
         }
 

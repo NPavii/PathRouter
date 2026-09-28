@@ -208,6 +208,36 @@ try
     MoveWithRetry(source + "_gone", source);
     repo.DeleteRoute(route3.Id);
 
+    // --- Консервация ветви: законсервированная не проверяется, остальные работают ---
+    var rc = svc.CreateRoute(new[] { source }, "Консервация", dest1);
+    svc.AddDestination(rc, dest2);
+    var dKeep = rc.Destinations[0];
+    var dCons = rc.Destinations[1];
+    dCons.IsConserved = true;
+    repo.SetConserved(dCons.Id, true);
+
+    File.WriteAllText(Path.Combine(source, "b.txt"), "v3"); // меняем источник
+    File.Delete(Path.Combine(dest1, "c.txt"));              // портим одну из обычных ветвей
+    svc.CheckRoute(rc);
+    Check(dCons.Diff is null && dCons.DestDiff is null && !dCons.HasUpdates,
+        "законсервированная ветвь не проверяется (ни источник, ни получатель)");
+    Check(dKeep.HasUpdates, "обычная ветвь того же маршрута продолжает проверяться");
+
+    try { svc.UpdateDestination(rc, dCons); Check(false, "синхронизация законсервированной ветви отклонена"); }
+    catch (InvalidOperationException) { Check(true, "синхронизация законсервированной ветви отклонена"); }
+
+    repo.SetConserved(dCons.Id, false);
+    dCons.IsConserved = false;
+    svc.CheckRoute(rc);
+    Check(dCons.HasUpdates, "после вскрытия ветвь снова видит изменения источника");
+
+    svc.UpdateDestination(rc, dKeep);
+    svc.UpdateDestination(rc, dCons);
+    Check(File.Exists(Path.Combine(dest1, "c.txt")) && File.Exists(Path.Combine(dest2, "b.txt")),
+        "после вскрытия обе ветви синхронизируются");
+    repo.DeleteRoute(rc.Id);
+    File.WriteAllText(Path.Combine(source, "b.txt"), "v1"); // вернуть как было
+
     // --- Пути (группы): объединение, коллапс, разгруппировка ---
     var r1 = repo.InsertRoute("Маршрут 1", source);
     var r2 = repo.InsertRoute("Маршрут 2", source);

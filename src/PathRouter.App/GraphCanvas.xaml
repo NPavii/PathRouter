@@ -11,7 +11,8 @@
                               PointerMoved="OnPointerMoved"
                               PointerReleased="OnPointerReleased"
                               PointerWheelChanged="OnPointerWheelChanged"
-                              DoubleTapped="OnDoubleTapped" />
+                              DoubleTapped="OnDoubleTapped"
+                              RightTapped="OnRightTapped" />
         <Border x:Name="EmptyHint" HorizontalAlignment="Center" VerticalAlignment="Center"
                 Background="#F0F2F7" CornerRadius="8" Padding="20,12" IsHitTestVisible="False">
             <TextBlock Text="Перетащите файлы слева, чтобы создать первый маршрут&#x0a;Колесо мыши — масштаб, перетаскивание фона — панорама"

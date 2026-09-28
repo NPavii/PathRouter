@@ -73,6 +73,9 @@ public sealed class RouteDestination
     /// <summary>Отличия самой папки назначения от снапшота (получатель изменился самостоятельно).</summary>
     public DiffResult? DestDiff { get; set; }
 
+    /// <summary>Консервация: проверка целостности и синхронизация этой ветви отключены.</summary>
+    public bool IsConserved { get; set; }
+
     /// <summary>Требуется синхронизация: изменился источник или получатель (или исходник пропал).</summary>
     public bool HasUpdates => Diff?.Changed == true || DestDiff?.Changed == true;
 }

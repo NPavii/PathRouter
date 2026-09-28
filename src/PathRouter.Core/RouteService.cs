@@ -104,6 +104,8 @@ public sealed class RouteService
     /// чужие файлы в папке назначения не трогаются.</summary>
     public DiffResult UpdateDestination(Route route, RouteDestination dest)
     {
+        if (dest.IsConserved)
+            throw new InvalidOperationException("Ветвь в консервации — синхронизация отключена. Сначала «Вскрыть».");
         var scan = FileScanner.ScanDirectory(route.SourcePath);
         if (scan is not null)
         {
@@ -119,13 +121,20 @@ public sealed class RouteService
         return dest.Diff;
     }
 
-    /// <summary>Сценарий 9: проверить маршрут в обе стороны — источник vs снапшот и каждый получатель vs снапшот.</summary>
+    /// <summary>Сценарий 9: проверить маршрут в обе стороны — источник vs снапшот и каждый получатель vs снапшот.
+    /// Законсервированные ветви не проверяются: их целостность намеренно не отслеживается.</summary>
     public DiffResult CheckRoute(Route route)
     {
         var scan = FileScanner.ScanDirectory(route.SourcePath);
         var merged = new DiffResult();
         foreach (var dest in route.Destinations)
         {
+            if (dest.IsConserved)
+            {
+                dest.Diff = null;
+                dest.DestDiff = null;
+                continue;
+            }
             dest.Diff = FileScanner.Compare(scan, dest.Manifest);
             dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
             merged.Added = Math.Max(merged.Added, dest.Diff.Added);

@@ -54,6 +54,7 @@ public sealed partial class GraphCanvas : UserControl
     public event Action<string>? FolderOpenRequested;
     public event Action<Route>? RouteCollapseToggled;
     public event Action<string>? GroupCollapseToggled;
+    public event Action<Route, RouteDestination>? ConservationToggled;
 
     /// <summary>Свёрнутость путей (group_name -> collapsed), задаётся извне после загрузки маршрутов.</summary>
     private IReadOnlyDictionary<string, bool> _collapsedGroups =
@@ -380,6 +381,24 @@ public sealed partial class GraphCanvas : UserControl
             float cy = destTop + i * DestRowH;
             float dy = cy - NodeH / 2;
             var destRect = new Rect(DestX, dy, DestW, NodeH);
+
+            if (dest.IsConserved)
+            {
+                // законсервировано: пунктирный контур, «холодное» состояние, без бейджей
+                ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(Color.FromArgb(255, 238, 241, 247), alpha));
+                using var dash = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle
+                    { DashStyle = Microsoft.Graphics.Canvas.Geometry.CanvasDashStyle.Dash };
+                ds.DrawRoundedRectangle(destRect, 8, 8,
+                                        WithAlpha(Color.FromArgb(255, 140, 155, 185), alpha), 1.5f, dash);
+                ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12,
+                                  WithAlpha(TextGray, alpha));
+                ds.DrawTextLayout(Text("❆ в консервации — проверка отключена", _fmtBadge!, DestW - 24), DestX + 26, dy + 32,
+                                  WithAlpha(Color.FromArgb(255, 120, 140, 175), alpha));
+                _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
+                DrawEdge(ds, NameX + NameW, nameCy + 6, DestX, cy, alpha);
+                continue;
+            }
+
             ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(DestFill, alpha));
             ds.DrawRoundedRectangle(destRect, 8, 8, WithAlpha(DestBorder, alpha), 1.5f);
             ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12, WithAlpha(TextGray, alpha));
@@ -543,5 +562,25 @@ public sealed partial class GraphCanvas : UserControl
             _ => null
         };
         if (path is not null) FolderOpenRequested?.Invoke(path);
+    }
+
+    /// <summary>ПКМ по ветви назначения — консервация/вскрытие (без проверки целостности).</summary>
+    private void OnRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        var hit = HitTest(e.GetPosition(Canvas));
+        if (hit?.Kind != NodeKind.Dest || hit.Dest is null) return;
+
+        var route = hit.Route;
+        var dest = hit.Dest;
+        var flyout = new MenuFlyout();
+        var item = new MenuFlyoutItem
+        {
+            Text = dest.IsConserved ? "Вскрыть — возобновить проверку" : "Законсервировать — не проверять",
+            Icon = new FontIcon { Glyph = dest.IsConserved ? "\uE7C3" : "❆" }
+        };
+        item.Click += (_, _) => ConservationToggled?.Invoke(route, dest);
+        flyout.Items.Add(item);
+        flyout.ShowAt(Canvas, e.GetPosition(Canvas));
+        e.Handled = true;
     }
 }

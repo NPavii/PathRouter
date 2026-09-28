@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
         Graph.FolderOpenRequested += OpenFolder;
         Graph.RouteCollapseToggled += OnGraphRouteCollapse;
         Graph.GroupCollapseToggled += name => ToggleGroup(name);
+        Graph.ConservationToggled += OnToggleConservation;
 
         DropZone.DragOver += OnDropZoneDragOver;
         DropZone.Drop += OnDropZoneDrop;
@@ -79,6 +80,9 @@ public sealed partial class MainWindow : Window
 
     private void LoadRoutes()
     {
+        // Мультивыделение списка — источник команд (объединить и пр.) — сохраняем между перестройками
+        var prevSelectedIds = RoutesList.SelectedItems.OfType<Route>().Select(r => r.Id).ToHashSet();
+
         // Сохраняем состояние диффов с предыдущих проверок — оно живёт в памяти
         // (в БД хранятся только манифесты), а пересоздание объектов его стирало бы.
         var prevAll = _allRoutes;
@@ -137,6 +141,17 @@ public sealed partial class MainWindow : Window
 
         var cvs = new CollectionViewSource { IsSourceGrouped = true, Source = view };
         RoutesList.ItemsSource = cvs.View;
+
+        // восстанавливаем мультивыделение (без событий, чтобы не дёргать выбор)
+        if (prevSelectedIds.Count > 0)
+        {
+            RoutesList.SelectionChanged -= OnRouteSelectionChanged;
+            foreach (var rg in view)
+                foreach (var r in rg)
+                    if (prevSelectedIds.Contains(r.Id))
+                        RoutesList.SelectedItems.Add(r);
+            RoutesList.SelectionChanged += OnRouteSelectionChanged;
+        }
 
         Graph.SetRoutes(_routes);
 
@@ -238,9 +253,10 @@ public sealed partial class MainWindow : Window
 
     private void UpdateSelectionUi()
     {
-        RoutesList.SelectionChanged -= OnRouteSelectionChanged;
-        RoutesList.SelectedItem = _selectedRoute;
-        RoutesList.SelectionChanged += OnRouteSelectionChanged;
+        // ВНИМАНИЕ: не трогаем RoutesList.SelectedItem/SelectedItems здесь — это метод
+        // вызывается из LoadRoutes на каждой фоновой проверке, и принудительный выбор
+        // одного элемента уничтожал бы мультивыделение пользователя. Список и граф
+        // синхронизируются через события выбора, а не через этот метод.
 
         Graph.SelectRoute(_selectedRoute);
         bool has = _selectedRoute is not null;
@@ -349,6 +365,7 @@ public sealed partial class MainWindow : Window
 
     private void OnRouteSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        // В Multiple-режиме SelectedItem — один из выделенных; для панели действий его достаточно
         _selectedRoute = RoutesList.SelectedItem as Route;
         UpdateSelectionUi();
     }
@@ -356,6 +373,10 @@ public sealed partial class MainWindow : Window
     private void OnGraphRouteSelected(Route route)
     {
         _selectedRoute = route;
+        // Клик по графу — намеренное действие: подсвечиваем этот маршрут и в списке
+        RoutesList.SelectionChanged -= OnRouteSelectionChanged;
+        RoutesList.SelectedItem = route;
+        RoutesList.SelectionChanged += OnRouteSelectionChanged;
         UpdateSelectionUi();
     }
 
@@ -707,6 +728,23 @@ public sealed partial class MainWindow : Window
         route.IsCollapsed = !route.IsCollapsed;
         _repo.SetRouteCollapsed(route.Id, route.IsCollapsed);
         LoadRoutes();
+    }
+
+    /// <summary>Консервация/вскрытие ветви: проверка целостности и синхронизация вкл/выкл.</summary>
+    private void OnToggleConservation(Route route, RouteDestination dest)
+    {
+        dest.IsConserved = !dest.IsConserved;
+        _repo.SetConserved(dest.Id, dest.IsConserved);
+        if (dest.IsConserved)
+        {
+            dest.Diff = null;
+            dest.DestDiff = null;
+        }
+        _svc.CheckRoute(route);
+        LoadRoutes();
+        Status(dest.IsConserved
+            ? $"Ветвь «{route.Name} → {dest.DestPath}» законсервирована: проверка и синхронизация отключены."
+            : $"Ветвь «{route.Name} → {dest.DestPath}» вскрыта: проверка возобновлена.");
     }
 
     private async void OnMergeRoutes(object sender, RoutedEventArgs e)
