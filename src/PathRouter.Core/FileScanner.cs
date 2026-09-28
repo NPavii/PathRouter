@@ -88,4 +88,30 @@ public static class FileScanner
 
         return diff;
     }
+
+    /// <summary>
+    /// Двусторонняя проверка «своих» файлов в папке назначения: маршрут отвечает только
+    /// за то, что сам положил (манифест). Чужие файлы в папке игнорируются — они не появляются
+    /// в диффе и не удаляются при синхронизации.
+    /// Deleted — наши файлы, которых в получателе больше нет; Modified — наши файлы перезаписали.
+    /// </summary>
+    public static DiffResult CompareOwned(List<FileEntry>? current, List<FileEntry>? manifest)
+    {
+        var diff = new DiffResult();
+        manifest ??= new List<FileEntry>();
+        if (current is null)
+        {
+            // папка назначения пропала: всё, что мы туда клали, считаем утраченным
+            diff.Deleted = manifest.Count;
+            return diff;
+        }
+
+        var curByPath = current.ToDictionary(f => f.RelPath, f => f);
+        foreach (var man in manifest)
+        {
+            if (!curByPath.TryGetValue(man.RelPath, out var cur)) diff.Deleted++;
+            else if (cur.Hash != man.Hash) diff.Modified++;
+        }
+        return diff;
+    }
 }

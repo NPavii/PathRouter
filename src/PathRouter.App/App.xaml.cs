@@ -36,12 +36,18 @@ public partial class App : Application
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
 
-        // Иконка окна (заголовок, панель задач) — берём из ресурсов exe
-        var hInst = GetModuleHandle(IntPtr.Zero);
-        var small = LoadImage(hInst, new IntPtr(1), 1, 32, 32, 0);
-        var big = LoadImage(hInst, new IntPtr(1), 1, 256, 256, 0);
-        if (small != IntPtr.Zero) SendMessage(hwnd, 0x0080, IntPtr.Zero, small);
-        if (big != IntPtr.Zero) SendMessage(hwnd, 0x0080, new IntPtr(1), big);
+        // Иконка окна (заголовок, панель задач): грузим app.ico из папки приложения.
+        // Загрузка из ресурсов exe (LoadImage с MAKEINTRESOURCE) на части конфигураций
+        // WinApp SDK возвращает ноль — файл надёжнее.
+        var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "app.ico");
+        if (System.IO.File.Exists(iconPath))
+        {
+            const uint LR_LOADFROMFILE = 0x0002;
+            var small = LoadImage(IntPtr.Zero, iconPath, 1, 32, 32, LR_LOADFROMFILE);
+            var big = LoadImage(IntPtr.Zero, iconPath, 1, 256, 256, LR_LOADFROMFILE);
+            if (small != IntPtr.Zero) SendMessage(hwnd, 0x0080, IntPtr.Zero, small);
+            if (big != IntPtr.Zero) SendMessage(hwnd, 0x0080, new IntPtr(1), big);
+        }
 
         // Размер выставляем отложенно: платформа может сбрасывать геометрию после первого layout
         var dq = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
@@ -58,11 +64,8 @@ public partial class App : Application
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
-    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
-    private static extern IntPtr GetModuleHandle(IntPtr lpModuleName);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern IntPtr LoadImage(IntPtr hInst, IntPtr name, uint type, int cx, int cy, uint fuLoad);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);

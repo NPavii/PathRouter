@@ -34,4 +34,9 @@
     <ProjectReference Include="..\PathRouter.Core\PathRouter.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- app.ico рядом с exe: иконка шапки окна грузится из файла (см. App.xaml.cs) -->
+    <Content Include="app.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

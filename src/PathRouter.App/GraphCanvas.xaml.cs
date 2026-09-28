@@ -283,7 +283,7 @@ public sealed partial class GraphCanvas : UserControl
             }
             else if (dest.DestDiff?.Changed == true)
             {
-                state = "получатель изменён " + dest.DestDiff.Describe();
+                state = "наши файлы: " + dest.DestDiff.Describe();
                 stateColor = ErrorRed;
             }
             else

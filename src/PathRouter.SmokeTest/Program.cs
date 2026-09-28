@@ -67,22 +67,52 @@ try
     Check(!route.Destinations[0].HasUpdates, "после обновления ветвь актуальна");
     Check(route.Destinations[1].HasUpdates, "вторая ветвь всё ещё требует обновления");
 
-    // --- Механика «≠»: получатель изменился самостоятельно ---
+    // --- Механика «≠»: маршрут отвечает только за свои файлы ---
     svc.UpdateDestination(route, route.Destinations[1]);
     svc.CheckRoute(route);
     Check(!route.HasUpdates, "после обновления всех ветвей актуально");
+    // чужой файл в папке получателя: соседний маршрут или пользователь положил своё
     File.WriteAllText(Path.Combine(dest2, "post_modified.txt"), "локальная правка");
+    svc.CheckRoute(route);
+    Check(!route.Destinations[1].HasUpdates,
+          "чужой файл в получателе игнорируется (≠ не загорается)");
+    // а вот если пропал НАШ файл — это ≠, нужно восстановление
     File.Delete(Path.Combine(dest2, "b.txt"));
     svc.CheckRoute(route);
     Check(route.Destinations[1].HasUpdates
-          && route.Destinations[1].DestDiff?.Changed == true
+          && route.Destinations[1].DestDiff?.Deleted == 1
           && route.Destinations[1].Diff?.Changed == false,
-          "детект изменений внутри получателя (≠), источник не тронут");
+          "детект пропажи своего файла в получателе (≠), источник не тронут");
     svc.UpdateDestination(route, route.Destinations[1]);
-    Check(File.Exists(Path.Combine(dest2, "b.txt")), "после синхронизации получатель восстановлен из источника");
-    Check(!File.Exists(Path.Combine(dest2, "post_modified.txt")), "сторонний файл получателя удалён");
+    Check(File.Exists(Path.Combine(dest2, "b.txt")), "после синхронизации свой файл восстановлен из источника");
+    Check(File.Exists(Path.Combine(dest2, "post_modified.txt")), "чужой файл получателя НЕ тронут");
     svc.CheckRoute(route);
     Check(!route.Destinations[1].HasUpdates, "после восстановления ветвь актуальна");
+
+    // Перезапись своего файла в получателе — тоже ≠
+    File.WriteAllText(Path.Combine(dest2, "b.txt"), "подмена!");
+    svc.CheckRoute(route);
+    Check(route.Destinations[1].DestDiff?.Modified == 1 && route.Destinations[1].HasUpdates,
+          "перезапись своего файла в получателе детектится (~1)");
+    svc.UpdateDestination(route, route.Destinations[1]);
+    Check(File.ReadAllText(Path.Combine(dest2, "b.txt")) == "v1", "свой файл возвращён к состоянию источника");
+    Check(File.Exists(Path.Combine(dest2, "post_modified.txt")), "чужой файл по-прежнему на месте");
+
+    // --- Два маршрута в одну папку назначения: каждый отвечает только за своё ---
+    var cSrc = Path.Combine(root, "SrcC");
+    Directory.CreateDirectory(cSrc);
+    File.WriteAllText(Path.Combine(cSrc, "mine_c.txt"), "C");
+    var routeY = svc.CreateRoute(new[] { cSrc }, "Маршрут C в общую папку", dest2);
+    // dest2 теперь общая: файлы маршрута (b,c) + маршрута Y (mine_c) + посторонний post_modified
+    File.Delete(Path.Combine(cSrc, "mine_c.txt"));
+    svc.CheckRoute(routeY);
+    svc.UpdateDestination(routeY, routeY.Destinations[0]);
+    Check(!File.Exists(Path.Combine(dest2, "mine_c.txt")), "маршрут Y удалил свой исчезнувший файл из общей папки");
+    Check(File.Exists(Path.Combine(dest2, "b.txt")) && File.Exists(Path.Combine(dest2, "c.txt")),
+        "файлы чужого маршрута в общей папке не тронуты");
+    Check(File.Exists(Path.Combine(dest2, "post_modified.txt")), "посторонний файл в общей папке не тронут");
+    Check(File.Exists(Path.Combine(cSrc, "mine_c.txt")) == false, "источник Y сам по себе: файл удалён, как задумано");
+    repo.DeleteRoute(routeY.Id);
 
     // --- Запрет дублей назначений ---
     try { svc.AddDestination(route, dest2); Check(false, "дубль назначения отклонён"); }

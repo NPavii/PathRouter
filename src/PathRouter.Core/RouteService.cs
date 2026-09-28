@@ -59,7 +59,7 @@ public sealed class RouteService
         try
         {
             var dest = _repo.AddDestination(route.Id, destPath, scan);
-            CopyContents(sourcePath, dest.DestPath, scan, mirror: false); // файлы — вне транзакции БД
+            CopyContents(sourcePath, dest.DestPath, scan, oldManifest: null); // файлы — вне транзакции БД
             route.Destinations.Add(dest);
             return route;
         }
@@ -87,7 +87,7 @@ public sealed class RouteService
         var dest = _repo.AddDestination(route.Id, destPath, scan);
         try
         {
-            CopyContents(route.SourcePath, dest.DestPath, scan, mirror: false);
+            CopyContents(route.SourcePath, dest.DestPath, scan, oldManifest: null);
         }
         catch
         {
@@ -99,20 +99,23 @@ public sealed class RouteService
         return dest;
     }
 
-    /// <summary>Сценарий 10: обновить назначение — привести его к актуальному состоянию источника.</summary>
+    /// <summary>Сценарий 10: обновить назначение — привести его к актуальному состоянию источника.
+    /// Удаляются только «свои» файлы (были в старом манифесте, исчезли из источника);
+    /// чужие файлы в папке назначения не трогаются.</summary>
     public DiffResult UpdateDestination(Route route, RouteDestination dest)
     {
         var scan = FileScanner.ScanDirectory(route.SourcePath);
         if (scan is not null)
         {
-            CopyContents(route.SourcePath, dest.DestPath, scan, mirror: true);
+            var oldManifest = dest.Manifest; // что этот маршрут положил ранее — только это и зеркалим
+            CopyContents(route.SourcePath, dest.DestPath, scan, oldManifest);
             _repo.UpdateManifest(dest.Id, scan);
             dest.Manifest = scan;
             dest.LastSyncUtc = DateTime.UtcNow;
         }
         // после синхронизации обе стороны актуальны (если источник найден)
         dest.Diff = FileScanner.Compare(scan, dest.Manifest);
-        dest.DestDiff = scan is null ? null : FileScanner.Compare(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
+        dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
         return dest.Diff;
     }
 
@@ -124,7 +127,7 @@ public sealed class RouteService
         foreach (var dest in route.Destinations)
         {
             dest.Diff = FileScanner.Compare(scan, dest.Manifest);
-            dest.DestDiff = scan is null ? null : FileScanner.Compare(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
+            dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
             merged.Added = Math.Max(merged.Added, dest.Diff.Added);
             merged.Modified = Math.Max(merged.Modified, dest.Diff.Modified);
             merged.Deleted = Math.Max(merged.Deleted, dest.Diff.Deleted);
@@ -139,9 +142,11 @@ public sealed class RouteService
 
     // ---------- файловые операции ----------
 
-    /// <summary>Копирует содержимое source в dest. mirror=true — привести dest к состоянию source
-    /// (новые/изменённые копируются, любые лишние файлы в dest удаляются).</summary>
-    private static void CopyContents(string sourcePath, string destPath, List<FileEntry> scan, bool mirror)
+    /// <summary>
+    /// Копирует содержимое source в dest. oldManifest != null — привести dest к состоянию source,
+    /// но удалять только файлы из oldManifest, которых больше нет в source (чужие файлы не трогаем).
+    /// </summary>
+    private static void CopyContents(string sourcePath, string destPath, List<FileEntry> scan, List<FileEntry>? oldManifest)
     {
         EnsureNotSame(sourcePath, destPath);
         Directory.CreateDirectory(destPath);
@@ -155,12 +160,11 @@ public sealed class RouteService
             File.Copy(src, dst, overwrite: true);
         }
 
-        if (mirror)
+        if (oldManifest is not null)
         {
-            var destScan = FileScanner.ScanDirectory(destPath) ?? new List<FileEntry>();
-            foreach (var f in destScan)
+            foreach (var f in oldManifest)
             {
-                if (curHashes.ContainsKey(f.RelPath)) continue;
+                if (curHashes.ContainsKey(f.RelPath)) continue; // ещё актуален
                 var dst = Path.Combine(destPath, f.RelPath);
                 try { if (File.Exists(dst)) File.Delete(dst); } catch { /* занят — пропускаем */ }
             }

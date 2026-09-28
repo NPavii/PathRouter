@@ -357,9 +357,9 @@ public sealed partial class MainWindow : Window
         SetBusy(true, "Обновляю ветви…");
         try
         {
-            // Защита от случайной потери данных: синхронизация зеркалит назначение,
-            // лишние файлы получателя будут удалены — предупреждаем явно.
-            int willDelete = dests.Sum(d => d.DestDiff?.Deleted ?? 0) + dests.Sum(d => d.Diff?.Deleted ?? 0);
+            // Защита от случайной потери данных: при синхронизации из назначения удаляются
+            // только файлы, которые маршрут сам туда положил и которых больше нет в источнике.
+            int willDelete = dests.Sum(d => d.Diff?.Deleted ?? 0);
             if (willDelete > 0)
             {
                 var confirm = new ContentDialog
@@ -492,6 +492,21 @@ public sealed partial class MainWindow : Window
     // ---------- утилиты ----------
 
     private void OnResetView(object sender, RoutedEventArgs e) => Graph.ResetView();
+
+    // ---------- сворачивание панели маршрутов ----------
+
+    private bool _panelCollapsed;
+
+    private void OnTogglePanel(object sender, RoutedEventArgs e)
+    {
+        _panelCollapsed = !_panelCollapsed;
+        RoutesColumn.Width = _panelCollapsed ? new GridLength(0) : new GridLength(410);
+        TogglePanelIcon.Glyph = _panelCollapsed ? "≫" : "≪";
+        ToolTipService.SetToolTip(TogglePanelButton, _panelCollapsed
+            ? "Развернуть панель маршрутов"
+            : "Свернуть панель маршрутов");
+        Graph.ResetView(); // пересчитать авто-масштаб под новую ширину канваса
+    }
 
     private async Task<string?> PickFolderAsync()
     {

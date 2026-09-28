@@ -13,7 +13,7 @@
 
         <Grid Grid.Row="0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="410" />
+                <ColumnDefinition x:Name="RoutesColumn" Width="410" />
                 <ColumnDefinition Width="4" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
@@ -167,6 +167,9 @@
         <Grid Grid.Column="2">
             <local:GraphCanvas x:Name="Graph" />
             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12">
+                <Button x:Name="TogglePanelButton" Click="OnTogglePanel" ToolTipService.ToolTip="Свернуть/развернуть панель маршрутов">
+                    <FontIcon x:Name="TogglePanelIcon" Glyph="&#xE89F;" FontSize="14" />
+                </Button>
                 <Button Content="Проверить обновления" Click="OnCheckUpdates" />
                 <Button Content="Сбросить вид" Click="OnResetView" />
             </StackPanel>
