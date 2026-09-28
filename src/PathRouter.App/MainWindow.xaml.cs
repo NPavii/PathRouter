@@ -6,6 +6,7 @@ using PathRouter.Core;
 using System.Collections.Generic;
 using Windows.Storage;
 using Windows.Storage.Pickers;
+using Windows.System;
 
 namespace PathRouter.App;
 
@@ -78,7 +79,25 @@ public sealed partial class MainWindow : Window
 
     private void LoadRoutes()
     {
+        // Сохраняем состояние диффов с предыдущих проверок — оно живёт в памяти
+        // (в БД хранятся только манифесты), а пересоздание объектов его стирало бы.
+        var prevAll = _allRoutes;
         _allRoutes = _repo.GetRoutes(includeArchived: true, includeHidden: true);
+        foreach (var fresh in _allRoutes)
+        {
+            var old = prevAll.FirstOrDefault(p => p.Id == fresh.Id);
+            if (old is null) continue;
+            fresh.HasUpdates = old.HasUpdates;
+            foreach (var fd in fresh.Destinations)
+            {
+                var od = old.Destinations.FirstOrDefault(d => d.Id == fd.Id);
+                if (od is not null)
+                {
+                    fd.Diff = od.Diff;
+                    fd.DestDiff = od.DestDiff;
+                }
+            }
+        }
         SyncWatchers();
 
         IEnumerable<Route> query = _allRoutes;
@@ -542,15 +561,24 @@ public sealed partial class MainWindow : Window
         return folder?.Path;
     }
 
-    private static void OpenFolder(string path)
+    private void OpenFolder(string path)
     {
         try
         {
+            if (!System.IO.Directory.Exists(path))
+            {
+                Status($"Папка не найдена: {path}");
+                ShowError(new System.IO.DirectoryNotFoundException(
+                    "Папка не найдена (возможно, диск отключён или папка переименована):\n" + path));
+                return;
+            }
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            Status($"Открыта папка: {path}");
         }
         catch (Exception ex)
         {
-            ShowErrorStatic($"Не удалось открыть папку:\n{ex.Message}");
+            Status($"Не удалось открыть папку: {path}");
+            ShowError(ex);
         }
     }
 
@@ -578,9 +606,6 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot
         }.ShowAsync();
     }
-
-    private static void ShowErrorStatic(string message) =>
-        System.Diagnostics.Debug.WriteLine(message);
 
     // ---------- поиск файла по всем путям ----------
 
@@ -636,9 +661,19 @@ public sealed partial class MainWindow : Window
 
     private void OnRoutesRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
-        // ПКМ по невыделенному элементу выделяет его (многоэлементный выбор — Ctrl/Shift + клик)
-        if ((e.OriginalSource as FrameworkElement)?.DataContext is Route r
-            && !RoutesList.SelectedItems.Contains(r))
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is not Route r) return;
+
+        // Ctrl+ПКМ — добавить/убрать из выделения (галочки Multiple тоже работают)
+        var keyState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
+        bool ctrl = (keyState & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        {
+            if (RoutesList.SelectedItems.Contains(r)) RoutesList.SelectedItems.Remove(r);
+            else RoutesList.SelectedItems.Add(r);
+            e.Handled = true;
+            return;
+        }
+        // ПКМ по невыделенному элементу выделяет его одного
+        if (!RoutesList.SelectedItems.Contains(r))
             RoutesList.SelectedItem = r;
     }
 
@@ -679,7 +714,7 @@ public sealed partial class MainWindow : Window
         var selected = SelectedRoutes;
         if (selected.Count < 2)
         {
-            Status("Выберите несколько маршрутов (Ctrl/Shift + клик), затем «Объединить в путь…».");
+            Status("Отметьте несколько маршрутов галочками (или Ctrl+ПКМ), затем «Объединить в путь…».");
             return;
         }
         var box = new TextBox { Text = selected[0].GroupName ?? string.Empty, Width = 320 };

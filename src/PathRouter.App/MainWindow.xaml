@@ -85,7 +85,7 @@
                             ToolTipService.ToolTip="Заменить текущую базу маршрутов файлом" />
                 </StackPanel>
                 <Grid Grid.Row="4">
-                    <ListView x:Name="RoutesList" SelectionMode="Extended" RightTapped="OnRoutesRightTapped"
+                    <ListView x:Name="RoutesList" SelectionMode="Multiple" RightTapped="OnRoutesRightTapped"
                               SelectionChanged="OnRouteSelectionChanged">
                     <ListView.ContextFlyout>
                         <MenuFlyout x:Name="RouteContextMenu" Opening="OnRouteMenuOpening">
