@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # ВАЖНО: из-за особенности XAML-компилятора Windows App SDK сборка идёт
+      # только через solution-файл (см. README) — проектная сборка ломает XBF.
+      - name: Restore (solution)
+        run: dotnet restore PathRouter.sln
+
+      - name: Build Core + Tests
+        run: dotnet build PathRouter.sln -c Release --no-restore
+
+      - name: Smoke-тест логики (весь сценарий)
+        run: dotnet run --project src/PathRouter.SmokeTest -c Release --no-build

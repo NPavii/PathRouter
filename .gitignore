@@ -1,0 +1,27 @@
+# --- Сборка .NET ---
+bin/
+obj/
+out/
+*.user
+*.suo
+.vs/
+
+# --- Готовые сборки (пересобираются dotnet publish) ---
+dist/
+
+# --- Локальный NuGet-кеш рядом с solution ---
+# Вендоренные .nupkg (~480 МБ) коммитить не нужно — при необходимости
+# скачиваются с nuget.org; в NuGet.config источник уже указан.
+nuget-local/*
+!nuget-local/README.md
+
+# --- Данные приложения (на всякий случай, если БД окажется рядом) ---
+*.db
+*.db-shm
+*.db-wal
+
+# --- ОС/редакторы ---
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
