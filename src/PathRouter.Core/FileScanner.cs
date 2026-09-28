@@ -1,10 +1,11 @@
-using System.Text;
-
 namespace PathRouter.Core;
 
 /// <summary>Сканирование папок и сравнение снапшотов.</summary>
 public static class FileScanner
 {
+    /// <summary>Сколько байт с начала и с конца файла читаем в контентный хэш.</summary>
+    private const int SampleSize = 64 * 1024;
+
     /// <summary>Рекурсивно сканирует папку. Возвращает null, если папки нет.</summary>
     public static List<FileEntry>? ScanDirectory(string path)
     {
@@ -33,10 +34,13 @@ public static class FileScanner
                         RelPath = rel,
                         Size = fi.Length,
                         LastWriteTicks = fi.LastWriteTimeUtc.Ticks,
-                        Hash = ComputeHash(rel, fi.Length, fi.LastWriteTimeUtc.Ticks)
+                        // Контентный хэш: размер + первые и последние 64 КБ файла.
+                        // Не зависит от mtime — перекопированный через архив/почту файл
+                        // с тем же содержимым считается тем же.
+                        Hash = ComputeContentHash(file, fi.Length)
                     });
                 }
-                catch (Exception) { /* файл недоступен — пропускаем */ }
+                catch (Exception) { /* файл недоступен/занят — пропускаем */ }
             }
 
             try
@@ -50,16 +54,34 @@ public static class FileScanner
         return result;
     }
 
-    public static string ComputeHash(string relPath, long size, long lastWriteTicks)
+    /// <summary>Контентный хэш (FNV-1a 64) по размеру + первым/последним 64 КБ файла.</summary>
+    public static string ComputeContentHash(string filePath, long size)
     {
-        // FNV-1a 64-bit по строке "путь|размер|mtime"
         ulong hash = 14695981039346656037UL;
         void Feed(byte b) { hash ^= b; hash *= 1099511628211UL; }
-        foreach (var ch in relPath) { Feed((byte)(ch & 0xFF)); Feed((byte)(ch >> 8)); }
-        Feed((byte)'|');
+        void FeedBytes(byte[] data, int count)
+        {
+            for (int i = 0; i < count; i++) Feed(data[i]);
+        }
+
         foreach (var ch in size.ToString()) Feed((byte)ch);
         Feed((byte)'|');
-        foreach (var ch in lastWriteTicks.ToString()) Feed((byte)ch);
+
+        if (size > 0)
+        {
+            var buf = new byte[SampleSize];
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            int front = (int)Math.Min(SampleSize, size);
+            int got = fs.Read(buf, 0, front);
+            FeedBytes(buf, got);
+
+            if (size > SampleSize)
+            {
+                fs.Seek(-SampleSize, SeekOrigin.End);
+                got = fs.Read(buf, 0, SampleSize);
+                FeedBytes(buf, got);
+            }
+        }
 
         return hash.ToString("x16");
     }

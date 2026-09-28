@@ -69,6 +69,31 @@ public sealed partial class GraphCanvas : UserControl
     private bool GroupCollapsed(string? name) =>
         name is not null && _collapsedGroups.TryGetValue(name, out var c) && c;
 
+    /// <summary>Сохранённые Y-позиции блоков (ручная раскладка пользователя).</summary>
+    private IReadOnlyDictionary<string, double> _layout =
+        new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+    public void SetLayout(IReadOnlyDictionary<string, double> layout)
+    {
+        _layout = layout;
+        Canvas.Invalidate();
+    }
+
+    public event Action<string, double>? LayoutChanged;
+
+    // ---------- блоки и ручная раскладка ----------
+
+    private sealed record Block(string Key, float H, bool IsPath, bool Collapsed, List<Route> Members);
+
+    private List<(Block Block, float Y)>? _drawnBlocks;      // позиции последнего кадра
+    private readonly List<(Rect Rect, string Key)> _blockRects = new(); // зоны захвата блоков
+    private string? _dragBlockKey;
+    private float _dragDeltaY;
+    private bool _blockDragging;
+
+    private static string BlockKey(Route r) =>
+        string.IsNullOrEmpty(r.GroupName) ? "S:" + SourceKey(r) : "G:" + r.GroupName;
+
     public GraphCanvas()
     {
         InitializeComponent();
@@ -180,45 +205,67 @@ public sealed partial class GraphCanvas : UserControl
         ds.Transform = Matrix3x2.CreateScale(_zoom) * Matrix3x2.CreateTranslation(_pan);
 
         _hits.Clear();
-        float y = 40;
+        _blockRects.Clear();
 
-        // Фоновая сетка (точки) — ограничена шириной контента
-        float contentH = 40 * 2;
-        foreach (var g in _routes.Where(r => !string.IsNullOrEmpty(r.GroupName))
-                                 .GroupBy(r => r.GroupName!, StringComparer.OrdinalIgnoreCase))
-            contentH += (GroupCollapsed(g.Key) ? CollapsedGroupH : PathGroupHeight(g.ToList())) + BlockPad;
-        foreach (var g in _routes.Where(r => string.IsNullOrEmpty(r.GroupName))
-                                 .GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
-            contentH += GroupHeight(g.ToList()) + BlockPad;
-        for (float gx = 0; gx < DestX + DestW + 120; gx += 40)
-            for (float gy = 0; gy < contentH; gy += 40)
-                ds.FillCircle(gx, gy, 1.2f, GridDot);
-
-        // --- Пути (объединённые группы маршрутов) ---
+        // --- собираем блоки в натуральном порядке: пути сверху, затем обычные группы по источникам ---
+        var blocks = new List<Block>();
         foreach (var g in _routes.Where(r => !string.IsNullOrEmpty(r.GroupName))
                                  .GroupBy(r => r.GroupName!, StringComparer.OrdinalIgnoreCase)
                                  .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
             var members = g.ToList();
-            if (GroupCollapsed(g.Key))
-            {
-                DrawCollapsedGroup(ds, g.Key, members, y);
-                y += CollapsedGroupH + BlockPad;
-            }
-            else
-            {
-                DrawPathContour(ds, g.Key, members, y);
-                y += PathGroupHeight(members) + BlockPad;
-            }
+            bool collapsed = GroupCollapsed(g.Key);
+            blocks.Add(new Block("G:" + g.Key,
+                                 collapsed ? CollapsedGroupH : PathGroupHeight(members),
+                                 IsPath: true, collapsed, members));
         }
-
-        // --- Обычные маршруты, сгруппированные по общему источнику ---
         foreach (var g in _routes.Where(r => string.IsNullOrEmpty(r.GroupName))
                                  .GroupBy(SourceKey, StringComparer.OrdinalIgnoreCase))
         {
-            var group = g.ToList();
-            DrawGroup(ds, group, y);
-            y += GroupHeight(group) + BlockPad;
+            var members = g.ToList();
+            blocks.Add(new Block("S:" + SourceKey(members[0]), GroupHeight(members),
+                                 IsPath: false, Collapsed: false, members));
+        }
+
+        // --- назначаем Y: сохранённая позиция пользователя, с уплотнением (без наложений) ---
+        var positions = new List<(Block Block, float Y)>();
+        float y = 40;
+        foreach (var b in blocks)
+        {
+            float by = y;
+            if (_layout.TryGetValue(b.Key, out var saved)) by = Math.Max((float)saved, y);
+            if (b.Key == _dragBlockKey) by += _dragDeltaY; // живой перенос за курсором
+            positions.Add((b, by));
+            y = by + b.H + BlockPad;
+        }
+        _drawnBlocks = positions;
+
+        // Фоновая сетка (точки) — ограничена контентом
+        float contentH = positions.Count > 0
+            ? positions[^1].Y + positions[^1].Block.H + 40
+            : 80;
+        for (float gx = 0; gx < DestX + DestW + 120; gx += 40)
+            for (float gy = 0; gy < contentH; gy += 40)
+                ds.FillCircle(gx, gy, 1.2f, GridDot);
+
+        // --- рисуем блоки и запоминаем их зоны для drag&drop ---
+        foreach (var (b, by) in positions)
+        {
+            DrawBlock(ds, b, by);
+            _blockRects.Add((new Rect(SourceX - 16, by, DestX + DestW + 32 - SourceX, b.H), b.Key));
+        }
+    }
+
+    private void DrawBlock(CanvasDrawingSession ds, Block b, float y)
+    {
+        if (b.IsPath)
+        {
+            if (b.Collapsed) DrawCollapsedGroup(ds, b.Key[2..], b.Members, y);
+            else DrawPathContour(ds, b.Key[2..], b.Members, y);
+        }
+        else
+        {
+            DrawGroup(ds, b.Members, y);
         }
     }
 
@@ -512,6 +559,23 @@ public sealed partial class GraphCanvas : UserControl
 
         SelectedRoute = null;
         RouteSelected?.Invoke(null!);
+
+        // перенос блока: захват за пустое место внутри блока (не за узел)
+        var wpos = ScreenToWorld(pos);
+        for (int i = _blockRects.Count - 1; i >= 0; i--)
+        {
+            if (_blockRects[i].Rect.Contains(wpos))
+            {
+                _blockDragging = true;
+                _dragBlockKey = _blockRects[i].Key;
+                _dragDeltaY = 0;
+                _lastPointer = pos;
+                Canvas.CapturePointer(e.Pointer);
+                Canvas.Invalidate();
+                return;
+            }
+        }
+
         _isPanning = true;
         Canvas.CapturePointer(e.Pointer);
         Canvas.Invalidate();
@@ -519,8 +583,15 @@ public sealed partial class GraphCanvas : UserControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
-        if (!_isPanning) return;
         var pos = e.GetCurrentPoint(Canvas).Position;
+        if (_blockDragging)
+        {
+            _dragDeltaY += (float)((pos.Y - _lastPointer.Y) / _zoom); // мировые единицы
+            _lastPointer = pos;
+            Canvas.Invalidate();
+            return;
+        }
+        if (!_isPanning) return;
         _pan = new Vector2((float)(_pan.X + pos.X - _lastPointer.X), (float)(_pan.Y + pos.Y - _lastPointer.Y));
         _lastPointer = pos;
         Canvas.Invalidate();
@@ -528,6 +599,22 @@ public sealed partial class GraphCanvas : UserControl
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (_blockDragging)
+        {
+            _blockDragging = false;
+            if (_dragBlockKey is not null && _drawnBlocks is not null)
+            {
+                // запоминаем конечную позицию (с учётом уплотнения она могла слегка съехать)
+                var entry = _drawnBlocks.FirstOrDefault(p => p.Block.Key == _dragBlockKey);
+                if (entry.Block is not null)
+                    LayoutChanged?.Invoke(_dragBlockKey, entry.Y);
+            }
+            _dragBlockKey = null;
+            _dragDeltaY = 0;
+            Canvas.ReleasePointerCapture(e.Pointer);
+            Canvas.Invalidate();
+            return;
+        }
         _isPanning = false;
         Canvas.ReleasePointerCapture(e.Pointer);
     }

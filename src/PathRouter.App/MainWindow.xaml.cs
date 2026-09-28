@@ -48,6 +48,11 @@ public sealed partial class MainWindow : Window
         Graph.RouteCollapseToggled += OnGraphRouteCollapse;
         Graph.GroupCollapseToggled += name => ToggleGroup(name);
         Graph.ConservationToggled += OnToggleConservation;
+        Graph.LayoutChanged += (key, y) =>
+        {
+            _repo.SaveLayoutPosition(key, y);
+            Status("Раскладка сохранена. Перетаскивайте блоки за пустое место, чтобы навести порядок.");
+        };
 
         DropZone.DragOver += OnDropZoneDragOver;
         DropZone.Drop += OnDropZoneDrop;
@@ -119,6 +124,7 @@ public sealed partial class MainWindow : Window
         var groupStates = _repo.GetGroups()
             .ToDictionary(g => g.Name, g => g.IsCollapsed, StringComparer.OrdinalIgnoreCase);
         Graph.SetGroupStates(groupStates);
+        Graph.SetLayout(_repo.GetLayout());
 
         // Группировка списка: пути — с заголовками, развёрнутые показывают маршруты,
         // свёрнутые показывают только заголовок; без пути — каждый маршрут отдельно.
@@ -222,8 +228,13 @@ public sealed partial class MainWindow : Window
             dirty = _allRoutes.Where(r => _dirtyRouteIds.Contains(r.Id)).ToList();
             _dirtyRouteIds.Clear();
         }
-        foreach (var route in dirty)
-            _svc.CheckRoute(route);
+        _svc.BeginPass();
+        try
+        {
+            foreach (var route in dirty)
+                _svc.CheckRoute(route);
+        }
+        finally { _svc.EndPass(); }
         DispatcherQueue.TryEnqueue(() =>
         {
             Graph.InvalidateGraph();
@@ -237,8 +248,13 @@ public sealed partial class MainWindow : Window
         if (_closed || _operationRunning) return;
         try
         {
-            foreach (var route in _allRoutes)
-                _svc.CheckRoute(route);
+            _svc.BeginPass();
+            try
+            {
+                foreach (var route in _allRoutes)
+                    _svc.CheckRoute(route);
+            }
+            finally { _svc.EndPass(); }
             DispatcherQueue.TryEnqueue(() =>
             {
                 Graph.InvalidateGraph();
@@ -531,8 +547,13 @@ public sealed partial class MainWindow : Window
             var routes = _routes;
             await Task.Run(() =>
             {
-                foreach (var route in routes)
-                    _svc.CheckRoute(route);
+                _svc.BeginPass(); // каждая папка сканируется один раз на проход
+                try
+                {
+                    foreach (var route in routes)
+                        _svc.CheckRoute(route);
+                }
+                finally { _svc.EndPass(); }
             });
             Graph.InvalidateGraph();
             LoadRoutes();

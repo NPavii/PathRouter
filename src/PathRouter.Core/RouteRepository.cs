@@ -60,6 +60,10 @@ public sealed class RouteRepository : IDisposable
                 name TEXT PRIMARY KEY,
                 is_collapsed INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS layout(
+                block_key TEXT PRIMARY KEY,
+                y REAL NOT NULL
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -315,9 +319,37 @@ public sealed class RouteRepository : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>Проверяет, что файл — база Каравана (нужные таблицы на месте).</summary>
-    public static bool IsValidDatabase(string path)
+    // ---------- Раскладка графа ----------
+
+    /// <summary>Сохранённые Y-позиции блоков графа (путь/источник), ключ — block_key.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public Dictionary<string, double> GetLayout()
     {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT block_key, y FROM layout;";
+        var dict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            dict[reader.GetString(0)] = reader.GetDouble(1);
+        return dict;
+    }
+
+    /// <summary>Запомнить вертикальную позицию блока графа (ручная раскладка пользователя).</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SaveLayoutPosition(string blockKey, double y)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO layout(block_key, y) VALUES($k, $y)
+            ON CONFLICT(block_key) DO UPDATE SET y=$y;
+            """;
+        cmd.Parameters.AddWithValue("$k", blockKey);
+        cmd.Parameters.AddWithValue("$y", y);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Проверяет, что файл — база Каравана (нужные таблицы на месте).</summary>
+    public static bool IsValidDatabase(string path)    {
         try
         {
             using var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly");

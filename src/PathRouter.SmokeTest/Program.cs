@@ -238,6 +238,43 @@ try
     repo.DeleteRoute(rc.Id);
     File.WriteAllText(Path.Combine(source, "b.txt"), "v1"); // вернуть как было
 
+    // --- Контентный хэш: mtime не влияет, содержимое — да ---
+    var chFile = Path.Combine(source, "ch.txt");
+    File.WriteAllText(chFile, "содержимое");
+    var s1 = FileScanner.ScanDirectory(source)!;
+    var h1 = s1.First(f => f.RelPath == "ch.txt").Hash;
+    File.SetLastWriteTimeUtc(chFile, DateTime.UtcNow.AddDays(-30)); // перекопировали с другой датой
+    var s2 = FileScanner.ScanDirectory(source)!;
+    var h2 = s2.First(f => f.RelPath == "ch.txt").Hash;
+    Check(h1 == h2, "контентный хэш не зависит от mtime");
+    Check(!FileScanner.Compare(s2, s1).Changed, "файл с тем же содержимым и новой датой НЕ «изменён»");
+    File.WriteAllText(chFile, "другое содержимое");
+    var s3 = FileScanner.ScanDirectory(source)!;
+    Check(FileScanner.Compare(s3, s2) is { Modified: 1 }, "изменённое содержимое детектится");
+    File.Delete(chFile);
+
+    // --- Кэш прохода: маршруты с общим источником внутри BeginPass/EndPass ---
+    svc.BeginPass();
+    try
+    {
+        var rA = svc.CreateRoute(new[] { source }, "Кэш А", dest1);
+        var rB = svc.CreateRoute(new[] { source }, "Кэш Б", dest2);
+        svc.CheckRoute(rA);
+        svc.CheckRoute(rB);
+        Check(rA.Destinations.Count == 1 && rB.Destinations.Count == 1
+              && !rA.HasUpdates && !rB.HasUpdates,
+              "проход с кэшем сканирования: обе проверки корректны");
+        repo.DeleteRoute(rA.Id);
+        repo.DeleteRoute(rB.Id);
+    }
+    finally { svc.EndPass(); }
+
+    // --- Раскладка графа ---
+    repo.SaveLayoutPosition("G:Путь А", 500);
+    var lay = repo.GetLayout();
+    Check(lay.TryGetValue("G:Путь А", out var yy) && Math.Abs(yy - 500) < 0.01,
+        "SaveLayoutPosition/GetLayout roundtrip");
+
     // --- Пути (группы): объединение, коллапс, разгруппировка ---
     var r1 = repo.InsertRoute("Маршрут 1", source);
     var r2 = repo.InsertRoute("Маршрут 2", source);

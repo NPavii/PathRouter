@@ -7,6 +7,31 @@ public sealed class RouteService
 
     public RouteService(RouteRepository repo) => _repo = repo;
 
+    // ---------- кэш сканирования на проход ----------
+
+    /// <summary>
+    /// В пределах одного прохода (BeginPass/EndPass) каждая папка сканируется один раз:
+    /// если из одного источника идут 10 маршрутов, источник сканируется 10 -> 1 раз.
+    /// Кэш используется только в CheckRoute (только чтение) — синхронизация всегда свежие сканы.
+    /// </summary>
+    private Dictionary<string, List<FileEntry>?>? _scanCache;
+
+    public void BeginPass() => _scanCache ??= new Dictionary<string, List<FileEntry>?>(StringComparer.OrdinalIgnoreCase);
+
+    public void EndPass() => _scanCache = null;
+
+    private List<FileEntry>? Scan(string path)
+    {
+        if (_scanCache is not null)
+        {
+            if (_scanCache.TryGetValue(path, out var cached)) return cached;
+            var fresh = FileScanner.ScanDirectory(path);
+            _scanCache[path] = fresh;
+            return fresh;
+        }
+        return FileScanner.ScanDirectory(path);
+    }
+
     /// <summary>
     /// Определяет исходную папку по перетащенным элементам.
     /// Один файл -> его папка; одна папка -> она сама; несколько -> общий корень.
@@ -125,7 +150,7 @@ public sealed class RouteService
     /// Законсервированные ветви не проверяются: их целостность намеренно не отслеживается.</summary>
     public DiffResult CheckRoute(Route route)
     {
-        var scan = FileScanner.ScanDirectory(route.SourcePath);
+        var scan = Scan(route.SourcePath); // через кэш прохода: общий источник сканируется один раз
         var merged = new DiffResult();
         foreach (var dest in route.Destinations)
         {
@@ -136,7 +161,7 @@ public sealed class RouteService
                 continue;
             }
             dest.Diff = FileScanner.Compare(scan, dest.Manifest);
-            dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
+            dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(Scan(dest.DestPath), dest.Manifest);
             merged.Added = Math.Max(merged.Added, dest.Diff.Added);
             merged.Modified = Math.Max(merged.Modified, dest.Diff.Modified);
             merged.Deleted = Math.Max(merged.Deleted, dest.Diff.Deleted);
