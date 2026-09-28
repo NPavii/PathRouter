@@ -275,6 +275,12 @@ try
     Check(lay.TryGetValue("G:Путь А", out var yy) && Math.Abs(yy - 500) < 0.01,
         "SaveLayoutPosition/GetLayout roundtrip");
 
+    // --- Позиции силового графа ---
+    repo.SaveForceLayout("F:D:\\test", 12.5, -30);
+    var fl = repo.GetForceLayout();
+    Check(fl.TryGetValue("F:D:\\test", out var p) && Math.Abs(p.X - 12.5) < 0.01 && Math.Abs(p.Y + 30) < 0.01,
+        "SaveForceLayout/GetForceLayout roundtrip");
+
     // --- Пути (группы): объединение, коллапс, разгруппировка ---
     var r1 = repo.InsertRoute("Маршрут 1", source);
     var r2 = repo.InsertRoute("Маршрут 2", source);

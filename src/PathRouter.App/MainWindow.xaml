@@ -210,8 +210,17 @@
         <!-- ===== Граф ===== -->
         <Grid Grid.Column="2">
             <local:GraphCanvas x:Name="Graph" />
+            <local:ForceGraphView x:Name="ForceGraph" Visibility="Collapsed" />
             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12">
-                <Button x:Name="TogglePanelButton" Click="OnTogglePanel" ToolTipService.ToolTip="Свернуть/развернуть панель маршрутов">
+                <Button x:Name="ViewToggleButton" Click="OnToggleView" AutomationProperties.Name="Переключить вид графа"
+                        ToolTipService.ToolTip="Переключить вид графа">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8A9;" FontSize="14" />
+                        <TextBlock x:Name="ViewToggleText" Text="Вид: Слои" FontSize="12" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="TogglePanelButton" Click="OnTogglePanel" AutomationProperties.Name="Свернуть панель маршрутов"
+                        ToolTipService.ToolTip="Свернуть/развернуть панель маршрутов">
                     <FontIcon x:Name="TogglePanelIcon" Glyph="&#xE89F;" FontSize="14" />
                 </Button>
                 <Button Content="Проверить обновления" Click="OnCheckUpdates" />

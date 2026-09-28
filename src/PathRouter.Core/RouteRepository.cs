@@ -64,6 +64,11 @@ public sealed class RouteRepository : IDisposable
                 block_key TEXT PRIMARY KEY,
                 y REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS force_layout(
+                node_id TEXT PRIMARY KEY,
+                x REAL NOT NULL,
+                y REAL NOT NULL
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -344,6 +349,36 @@ public sealed class RouteRepository : IDisposable
             ON CONFLICT(block_key) DO UPDATE SET y=$y;
             """;
         cmd.Parameters.AddWithValue("$k", blockKey);
+        cmd.Parameters.AddWithValue("$y", y);
+        cmd.ExecuteNonQuery();
+    }
+
+    // ---------- Силовой граф (вид «как в Obsidian») ----------
+
+    /// <summary>Сохранённые позиции точек силового графа: node_id -> (x, y).</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public Dictionary<string, (double X, double Y)> GetForceLayout()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT node_id, x, y FROM force_layout;";
+        var dict = new Dictionary<string, (double, double)>(StringComparer.OrdinalIgnoreCase);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            dict[reader.GetString(0)] = (reader.GetDouble(1), reader.GetDouble(2));
+        return dict;
+    }
+
+    /// <summary>Запомнить позицию точки силового графа (после перетаскивания пользователем).</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SaveForceLayout(string nodeId, double x, double y)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO force_layout(node_id, x, y) VALUES($k, $x, $y)
+            ON CONFLICT(node_id) DO UPDATE SET x=$x, y=$y;
+            """;
+        cmd.Parameters.AddWithValue("$k", nodeId);
+        cmd.Parameters.AddWithValue("$x", x);
         cmd.Parameters.AddWithValue("$y", y);
         cmd.ExecuteNonQuery();
     }

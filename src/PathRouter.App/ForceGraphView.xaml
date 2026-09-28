@@ -1,0 +1,21 @@
+<UserControl
+    x:Class="PathRouter.App.ForceGraphView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml">
+    <Grid Background="#FAFBFD">
+        <canvas:CanvasControl x:Name="Canvas"
+                              Draw="OnDraw"
+                              CreateResources="OnCreateResources"
+                              PointerPressed="OnPointerPressed"
+                              PointerMoved="OnPointerMoved"
+                              PointerReleased="OnPointerReleased"
+                              PointerWheelChanged="OnPointerWheelChanged"
+                              DoubleTapped="OnDoubleTapped" />
+        <Border x:Name="EmptyHint" HorizontalAlignment="Center" VerticalAlignment="Center"
+                Background="#F0F2F7" CornerRadius="8" Padding="20,12" IsHitTestVisible="False">
+            <TextBlock Text="Граф пуст — создайте первый маршрут слева&#x0a;Точки — папки, линии — ветви маршрутов&#x0a;Точки можно перетаскивать: физика разложит караван сама"
+                       TextAlignment="Center" Foreground="#667" FontSize="13" />
+        </Border>
+    </Grid>
+</UserControl>

@@ -54,6 +54,10 @@ public sealed partial class MainWindow : Window
             Status("Раскладка сохранена. Перетаскивайте блоки за пустое место, чтобы навести порядок.");
         };
 
+        ForceGraph.RouteSelected += OnGraphRouteSelected;
+        ForceGraph.FolderOpenRequested += OpenFolder;
+        ForceGraph.NodeMoved += (id, x, y) => _repo.SaveForceLayout(id, x, y);
+
         DropZone.DragOver += OnDropZoneDragOver;
         DropZone.Drop += OnDropZoneDrop;
         RouteNameBox.TextChanged += (_, _) => UpdatePutButton();
@@ -160,6 +164,8 @@ public sealed partial class MainWindow : Window
         }
 
         Graph.SetRoutes(_routes);
+        ForceGraph.SetRoutes(_routes);
+        ForceGraph.SetSavedLayout(_repo.GetForceLayout());
 
         if (_selectedRoute is not null)
             _selectedRoute = _routes.FirstOrDefault(r => r.Id == _selectedRoute.Id)
@@ -275,6 +281,7 @@ public sealed partial class MainWindow : Window
         // синхронизируются через события выбора, а не через этот метод.
 
         Graph.SelectRoute(_selectedRoute);
+        ForceGraph.SelectRoute(_selectedRoute);
         bool has = _selectedRoute is not null;
         RouteActions.IsEnabled = has;
         if (_selectedRoute is not null)
@@ -577,6 +584,28 @@ public sealed partial class MainWindow : Window
     // ---------- утилиты ----------
 
     private void OnResetView(object sender, RoutedEventArgs e) => Graph.ResetView();
+
+    // ---------- переключение видов графа ----------
+
+    private bool _forceViewActive;
+
+    private void OnToggleView(object sender, RoutedEventArgs e)
+    {
+        _forceViewActive = !_forceViewActive;
+        Graph.Visibility = _forceViewActive ? Visibility.Collapsed : Visibility.Visible;
+        ForceGraph.Visibility = _forceViewActive ? Visibility.Visible : Visibility.Collapsed;
+        ViewToggleText.Text = _forceViewActive ? "Вид: Граф" : "Вид: Слои";
+        if (_forceViewActive)
+        {
+            ForceGraph.SetRoutes(_routes); // физика досчитает с текущих позиций
+            ForceGraph.SetSavedLayout(_repo.GetForceLayout());
+            Status("Силовой граф: точки — папки, линии — ветви. Точки можно перетаскивать.");
+        }
+        else
+        {
+            Status("Слоистый вид: источники слева, пути — в общих контурах.");
+        }
+    }
 
     // ---------- сворачивание панели маршрутов ----------
 
