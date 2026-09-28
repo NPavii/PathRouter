@@ -64,6 +64,17 @@ dotnet build PathRouter.sln -c Release        # вывод: src/PathRouter.App/b
 
 Smoke-тест логики: `dotnet run --project src/PathRouter.SmokeTest`
 
+## Готовая сборка (dist)
+
+`dotnet publish` на уровне проекта **не использовать** — та же ловушка с XBF, краш
+`XamlParseException` при запуске. Рабочий рецепт — собрать solution (см. выше) и скопировать
+вывод, как сделан существующий `dist/`:
+
+```
+dotnet build PathRouter.sln -c Release
+robocopy src\PathRouter.App\bin\x64\Release\net8.0-windows10.0.19041.0 dist /MIR
+```
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`): restore + build через solution, прогон smoke-теста
