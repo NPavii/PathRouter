@@ -25,17 +25,6 @@ public sealed partial class GraphCanvas : UserControl
     private const float DestX = 790, DestW = 270;
     private const float DestRowH = 82, BlockPad = 30, MinBlockH = 100;
 
-    private static readonly Color Accent = Color.FromArgb(255, 79, 107, 237);
-    private static readonly Color AccentDark = Color.FromArgb(255, 43, 74, 203);
-    private static readonly Color SourceFill = Color.FromArgb(255, 238, 243, 255);
-    private static readonly Color DestFill = Color.FromArgb(255, 244, 244, 244);
-    private static readonly Color DestBorder = Color.FromArgb(255, 200, 200, 200);
-    private static readonly Color EdgeColor = Color.FromArgb(255, 154, 167, 199);
-    private static readonly Color UpdateColor = Color.FromArgb(255, 247, 99, 12);
-    private static readonly Color ErrorRed = Color.FromArgb(255, 196, 43, 28);
-    private static readonly Color TextDark = Color.FromArgb(255, 40, 45, 60);
-    private static readonly Color TextGray = Color.FromArgb(255, 110, 115, 130);
-    private static readonly Color GridDot = Color.FromArgb(60, 120, 130, 160);
 
     private List<Route> _routes = new();
     private readonly List<NodeHit> _hits = new();
@@ -205,7 +194,7 @@ public sealed partial class GraphCanvas : UserControl
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
     {
         var ds = args.DrawingSession;
-        ds.Clear(Color.FromArgb(255, 250, 251, 253));
+        ds.Clear(AppTheme.Bg);
         ds.Transform = Matrix3x2.CreateScale(_zoom) * Matrix3x2.CreateTranslation(_pan);
 
         _hits.Clear();
@@ -231,6 +220,10 @@ public sealed partial class GraphCanvas : UserControl
                                  IsPath: false, Collapsed: false, members));
         }
 
+        // --- топологический порядок: блок-источник цепочки идёт сразу после своего питающего ---
+        // (А→Б, Б→В: блок Б — под блоком А, дуга цепочки идёт вниз, а не в начало списка)
+        blocks = OrderByChains(blocks);
+
         // --- назначаем Y: сохранённая позиция пользователя, с уплотнением (без наложений) ---
         var positions = new List<(Block Block, float Y)>();
         float y = 40;
@@ -250,7 +243,7 @@ public sealed partial class GraphCanvas : UserControl
             : 80;
         for (float gx = 0; gx < DestX + DestW + 120; gx += 40)
             for (float gy = 0; gy < contentH; gy += 40)
-                ds.FillCircle(gx, gy, 1.2f, GridDot);
+                ds.FillCircle(gx, gy, 1.2f, AppTheme.GridDot);
 
         // --- цепочки синхронизации: назначение, которое является источником другого блока ---
         // (Б = назначение А и источник Б→В: файлы текут транзитом; рисуем дугу Б -> блок Б)
@@ -292,6 +285,55 @@ public sealed partial class GraphCanvas : UserControl
         }
     }
 
+    /// <summary>
+    /// Порядок блоков: пути первыми (как раньше), затем незагруппированные — в топологическом
+    /// порядке цепочек: блок чей источник является чужим назначением, встаёт сразу после
+    /// блока-источника. При нескольких питающих — после последнего из уже выставленных.
+    /// </summary>
+    private static List<Block> OrderByChains(List<Block> blocks)
+    {
+        var ordered = new List<Block>();
+        ordered.AddRange(blocks.Where(b => b.IsPath));
+
+        var rest = blocks.Where(b => !b.IsPath).ToList();
+        var srcOf = rest.Select(b => SourceKey(b.Members[0])).ToList();
+        var destsOf = rest.Select(b => b.Members
+                .SelectMany(r => r.Destinations)
+                .Select(d => d.DestPath.TrimEnd('\\'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        var emitted = new bool[rest.Count];
+        int left = rest.Count;
+        while (left > 0)
+        {
+            bool progress = false;
+            for (int i = 0; i < rest.Count; i++)
+            {
+                if (emitted[i]) continue;
+                // ждём, пока все блоки, питающие этот источник, не будут выставлены
+                bool ready = true;
+                for (int j = 0; j < rest.Count; j++)
+                {
+                    if (i == j || emitted[j]) continue;
+                    if (destsOf[j].Contains(srcOf[i])) { ready = false; break; }
+                }
+                if (!ready) continue;
+                emitted[i] = true;
+                ordered.Add(rest[i]);
+                left--;
+                progress = true;
+            }
+            if (!progress) // цикл (А→Б и Б→А) — выставляем остаток в натуральном порядке
+            {
+                for (int i = 0; i < rest.Count; i++)
+                    if (!emitted[i]) { emitted[i] = true; ordered.Add(rest[i]); }
+                break;
+            }
+        }
+        return ordered;
+    }
+
     /// <summary>Позиции узлов назначений блока — та же математика, что в DrawGroup.</summary>
     private static IEnumerable<(RouteDestination Dest, float Cy)> DestNodePositions(List<Route> group, float blockY)
     {
@@ -315,7 +357,7 @@ public sealed partial class GraphCanvas : UserControl
     /// <summary>Пунктирная дуга цепочки: от узла назначения к блоку, где эта папка — источник.</summary>
     private static void DrawChainEdge(CanvasDrawingSession ds, float x1, float y1, float x2, float y2)
     {
-        var color = Color.FromArgb(200, 79, 107, 237);
+        var color = AppTheme.ChainColor;
         using var dash = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle
             { DashStyle = Microsoft.Graphics.Canvas.Geometry.CanvasDashStyle.Dash };
         using var path = new Microsoft.Graphics.Canvas.Geometry.CanvasPathBuilder(ds);
@@ -350,12 +392,12 @@ public sealed partial class GraphCanvas : UserControl
         float w = DestX + DestW + 16 - (SourceX - 16);
         var rect = new Rect(SourceX - 16, y, w, CollapsedGroupH - 14);
 
-        ds.FillRoundedRectangle(rect, 12, 12, WithAlpha(Color.FromArgb(255, 237, 240, 250), alpha));
-        ds.DrawRoundedRectangle(rect, 12, 12, WithAlpha(Color.FromArgb(255, 150, 165, 220), alpha), 1.5f);
+        ds.FillRoundedRectangle(rect, 12, 12, WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 36, 39, 52) : Color.FromArgb(255, 237, 240, 250), alpha));
+        ds.DrawRoundedRectangle(rect, 12, 12, WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 84, 93, 130) : Color.FromArgb(255, 150, 165, 220), alpha), 1.5f);
         string text = $"▸  {Shorten(name, 44)}  —  {members.Count} {(members.Count == 1 ? "маршрут" : "маршрута")}";
         if (withUpdates > 0) text += $"  •  обновлений: {withUpdates}";
         ds.DrawTextLayout(Text(text, _fmtTitle!, w - 40), SourceX, y + 12,
-                          WithAlpha(Color.FromArgb(255, 60, 70, 110), alpha));
+                          WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 176, 184, 220) : Color.FromArgb(255, 60, 70, 110), alpha));
         _hits.Add(new NodeHit(rect, members[0], null, NodeKind.GroupToggle, name));
     }
 
@@ -365,11 +407,11 @@ public sealed partial class GraphCanvas : UserControl
         float h = PathGroupHeight(members);
         float x = SourceX - 16, w = DestX + DestW + 16 - x;
 
-        ds.FillRoundedRectangle(new Rect(x, y, w, h), 14, 14, Color.FromArgb(255, 242, 245, 255));
-        ds.DrawRoundedRectangle(new Rect(x, y, w, h), 14, 14, Accent, 2f);
+        ds.FillRoundedRectangle(new Rect(x, y, w, h), 14, 14, AppTheme.IsDark ? Color.FromArgb(255, 34, 37, 50) : Color.FromArgb(255, 242, 245, 255));
+        ds.DrawRoundedRectangle(new Rect(x, y, w, h), 14, 14, AppTheme.Accent, 2f);
 
         // заголовок пути + зона клика для сворачивания
-        ds.DrawTextLayout(Text($"▼  {Shorten(name, 50)}", _fmtTitle!, w - 40), SourceX, y + 8, AccentDark);
+        ds.DrawTextLayout(Text($"▼  {Shorten(name, 50)}", _fmtTitle!, w - 40), SourceX, y + 8, AppTheme.AccentDark);
         _hits.Add(new NodeHit(new Rect(x, y, w, GroupTitleH + 2), members[0], null, NodeKind.GroupToggle, name));
 
         float inner = y + PathPad + GroupTitleH;
@@ -411,18 +453,18 @@ public sealed partial class GraphCanvas : UserControl
                           && group.Any(r => ReferenceEquals(r, SelectedRoute));
 
         // Палитра: обычная либо «тревожная» (красная)
-        var srcFill = sourceMissing ? Color.FromArgb(255, 253, 231, 233) : SourceFill;
-        var srcBorder = sourceMissing ? ErrorRed : (groupSelected ? AccentDark : Accent);
+        var srcFill = sourceMissing ? AppTheme.ErrorRed : AppTheme.SourceFill;
+        var srcBorder = sourceMissing ? AppTheme.ErrorRed : (groupSelected ? AppTheme.AccentDark : AppTheme.Accent);
 
         // --- общий узел-источник ---
         float srcY = blockCenterY - NodeH / 2;
         var srcRect = new Rect(SourceX, srcY, SourceW, NodeH);
         ds.FillRoundedRectangle(srcRect, 8, 8, WithAlpha(srcFill, alpha));
         ds.DrawRoundedRectangle(srcRect, 8, 8, WithAlpha(srcBorder, alpha), groupSelected ? 2.5f : 1.5f);
-        ds.DrawTextLayout(Text("📁 " + Shorten(group[0].SourcePath, 38), _fmtPath!, SourceW - 24), SourceX + 12, srcY + 12, WithAlpha(TextGray, alpha));
+        ds.DrawTextLayout(Text("📁 " + Shorten(group[0].SourcePath, 38), _fmtPath!, SourceW - 24), SourceX + 12, srcY + 12, WithAlpha(AppTheme.TextGray, alpha));
         string srcSub = group.Count == 1 ? "1 маршрут" : $"{group.Count} маршрута/маршрутов";
         if (sourceMissing) srcSub = "источник не найден";
-        ds.DrawTextLayout(Text(srcSub, _fmtPath!, SourceW - 24), SourceX + 26, srcY + 30, WithAlpha(sourceMissing ? ErrorRed : TextDark, alpha));
+        ds.DrawTextLayout(Text(srcSub, _fmtPath!, SourceW - 24), SourceX + 26, srcY + 30, WithAlpha(sourceMissing ? AppTheme.ErrorRed : AppTheme.TextDark, alpha));
         _hits.Add(new NodeHit(srcRect, group[0], null, NodeKind.Source));
 
         // --- стеки маршрутов внутри блока ---
@@ -445,13 +487,13 @@ public sealed partial class GraphCanvas : UserControl
                                 bool sourceMissing, byte alpha)
     {
         bool selected = ReferenceEquals(route, SelectedRoute);
-        var nameFill = sourceMissing ? ErrorRed : Accent;
+        var nameFill = sourceMissing ? AppTheme.ErrorRed : AppTheme.Accent;
 
         // --- имя маршрута ---
         float nameY = nameCy - NodeH / 2 - 4;
         var nameRect = new Rect(NameX, nameY, NameW, NodeH + 8);
         ds.FillRoundedRectangle(nameRect, 10, 10, WithAlpha(nameFill, alpha));
-        ds.DrawRoundedRectangle(nameRect, 10, 10, WithAlpha(selected ? AccentDark : nameFill, alpha), selected ? 2.5f : 1f);
+        ds.DrawRoundedRectangle(nameRect, 10, 10, WithAlpha(selected ? AppTheme.AccentDark : nameFill, alpha), selected ? 2.5f : 1f);
 
         if (route.IsCollapsed)
         {
@@ -484,7 +526,7 @@ public sealed partial class GraphCanvas : UserControl
         if (route.Destinations.Count == 0)
         {
             // заглушка «нет ветвей» — серый пунктирный стуб
-            ds.DrawTextLayout(Text("— нет ветвей —", _fmtPath!, 160), DestX, nameCy - 8, WithAlpha(TextGray, alpha));
+            ds.DrawTextLayout(Text("— нет ветвей —", _fmtPath!, 160), DestX, nameCy - 8, WithAlpha(AppTheme.TextGray, alpha));
             return;
         }
 
@@ -505,54 +547,54 @@ public sealed partial class GraphCanvas : UserControl
             if (dest.IsConserved)
             {
                 // законсервировано: пунктирный контур, «холодное» состояние, без бейджей
-                ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(Color.FromArgb(255, 238, 241, 247), alpha));
+                ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(AppTheme.ConservedBg, alpha));
                 using var dash = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle
                     { DashStyle = Microsoft.Graphics.Canvas.Geometry.CanvasDashStyle.Dash };
                 ds.DrawRoundedRectangle(destRect, 8, 8,
-                                        WithAlpha(Color.FromArgb(255, 140, 155, 185), alpha), 1.5f, dash);
+                                        WithAlpha(AppTheme.ConservedBr, alpha), 1.5f, dash);
                 ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12,
-                                  WithAlpha(TextGray, alpha));
+                                  WithAlpha(AppTheme.TextGray, alpha));
                 ds.DrawTextLayout(Text("❆ в консервации — проверка отключена", _fmtBadge!, DestW - 24), DestX + 26, dy + 32,
-                                  WithAlpha(Color.FromArgb(255, 120, 140, 175), alpha));
+                                  WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 140, 158, 195) : Color.FromArgb(255, 120, 140, 175), alpha));
                 _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
                 DrawEdge(ds, NameX + NameW, nameCy + 6, DestX, cy, alpha);
                 continue;
             }
 
-            ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(DestFill, alpha));
-            ds.DrawRoundedRectangle(destRect, 8, 8, WithAlpha(DestBorder, alpha), 1.5f);
-            ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12, WithAlpha(TextGray, alpha));
+            ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(AppTheme.DestFill, alpha));
+            ds.DrawRoundedRectangle(destRect, 8, 8, WithAlpha(AppTheme.DestBorder, alpha), 1.5f);
+            ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12, WithAlpha(AppTheme.TextGray, alpha));
             string state;
             Color stateColor;
             if (dest.Diff is null)
             {
                 state = $"синхр. {dest.LastSyncUtc.ToLocalTime():dd.MM.yyyy HH:mm}";
-                stateColor = TextGray;
+                stateColor = AppTheme.TextGray;
             }
             else if (dest.HasConflicts)
             {
                 state = $"⚠ конфликт: {dest.Conflicts.Count} файл(а) правились с обеих сторон";
-                stateColor = ErrorRed;
+                stateColor = AppTheme.ErrorRed;
             }
             else if (dest.Diff.SourceMissing)
             {
                 state = "источник не найден";
-                stateColor = ErrorRed;
+                stateColor = AppTheme.ErrorRed;
             }
             else if (dest.Diff.Changed)
             {
                 state = "источник: " + dest.Diff.Describe();
-                stateColor = UpdateColor;
+                stateColor = AppTheme.UpdateColor;
             }
             else if (dest.DestDiff?.Changed == true)
             {
                 state = "наши файлы: " + dest.DestDiff.Describe();
-                stateColor = ErrorRed;
+                stateColor = AppTheme.ErrorRed;
             }
             else
             {
                 state = "актуально";
-                stateColor = Color.FromArgb(255, 60, 160, 90);
+                stateColor = AppTheme.OkGreen;
             }
             ds.DrawTextLayout(Text(state, _fmtBadge!, DestW - 24), DestX + 26, dy + 32, WithAlpha(stateColor, alpha));
             // метка цепочки: эта папка — источник других маршрутов (файлы текут дальше)
@@ -570,7 +612,7 @@ public sealed partial class GraphCanvas : UserControl
             if (dest.HasUpdates)
             {
                 bool sourceSide = dest.Diff?.Changed == true;
-                var badgeColor = sourceSide ? UpdateColor : ErrorRed;
+                var badgeColor = sourceSide ? AppTheme.UpdateColor : AppTheme.ErrorRed;
                 string glyph = sourceSide ? "↻" : "≠";
                 float bx = DestX + DestW - 4, by = dy - 4;
                 ds.FillCircle(bx, by, 13, WithAlpha(badgeColor, alpha));
@@ -583,7 +625,7 @@ public sealed partial class GraphCanvas : UserControl
 
     private static void DrawEdge(CanvasDrawingSession ds, float x1, float y1, float x2, float y2, byte alpha)
     {
-        var color = WithAlpha(EdgeColor, alpha);
+        var color = WithAlpha(AppTheme.EdgeColor, alpha);
         float mx = (x1 + x2) / 2;
         using var path = new Microsoft.Graphics.Canvas.Geometry.CanvasPathBuilder(ds);
         path.BeginFigure(x1, y1);

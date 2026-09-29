@@ -291,6 +291,50 @@ public sealed partial class MainWindow : Window
         }.ShowAsync();
     }
 
+    // ---------- тема ----------
+
+    private void ApplyTheme()
+    {
+        RootGrid.RequestedTheme = AppTheme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+        LeftPanel.Background = AppTheme.Brush(AppTheme.PanelBg);
+        RouteActionsBorder.Background = AppTheme.Brush(AppTheme.ActionsBg);
+        DividerRect.Fill = AppTheme.Brush(AppTheme.Divider);
+        DropZone.Background = AppTheme.Brush(AppTheme.DropZoneBg);
+        DropZone.BorderBrush = AppTheme.Brush(AppTheme.DropZoneBrush);
+        Graph.InvalidateGraph();
+        ForceGraph.InvalidateGraph();
+    }
+
+    private void OnToggleTheme(object sender, RoutedEventArgs e)
+    {
+        AppTheme.Toggle();
+        ApplyTheme();
+        // диапазоны и значения слайдеров физики — в коде: в XAML парсер Slider падает,
+        // если Minimum/Maximum/Value попадают не в тот порядок
+        PhysRepel.Minimum = 2000; PhysRepel.Maximum = 30000; PhysRepel.StepFrequency = 500;
+        PhysRepel.Value = 9000;
+        PhysLink.Minimum = 60; PhysLink.Maximum = 400; PhysLink.StepFrequency = 10;
+        PhysLink.Value = 150;
+        PhysGravity.Minimum = 0; PhysGravity.Maximum = 80; PhysGravity.StepFrequency = 1;
+        PhysGravity.Value = 15;
+        Status(AppTheme.IsDark ? "Тёмная тема." : "Светлая тема.");
+    }
+
+    // ---------- физика силового вида ----------
+
+    private void OnPhysicsChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        ForceGraph.Repulsion = (float)PhysRepel.Value;
+        ForceGraph.RestLength = (float)PhysLink.Value;
+        ForceGraph.Gravity = (float)PhysGravity.Value / 1000f;
+    }
+
+    private void OnShuffleForce(object sender, RoutedEventArgs e)
+    {
+        ForceGraph.Shuffle();
+        Status("Точки разбросаны заново — физика пересобирает картину.");
+    }
+
 }
 
 /// <summary>Группа маршрутов для отображения: Key — название пути, сама группа — список маршрутов.

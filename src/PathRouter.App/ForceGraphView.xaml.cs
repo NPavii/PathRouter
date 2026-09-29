@@ -38,14 +38,26 @@ public sealed partial class ForceGraphView : UserControl
         public bool Conserved;
     }
 
-    // --- физика ---
-    private const float RepulsionK = 9000f;   // отталкивание, ~1/d²
-    private const float SpringK = 0.06f;      // пружина на рёбрах
-    private const float RestLen = 150f;
-    private const float GravityK = 0.015f;    // тяга к центру полотна
+    // --- физика (настраивается ползунками) ---
+    public float Repulsion { get; set; } = 9000f;   // отталкивание, ~1/d²
+    public float RestLength { get; set; } = 150f;   // длина связи
+    public float Gravity { get; set; } = 0.015f;    // тяга к центру полотна
     private const float Damping = 0.8f;
     private const float MaxSpeed = 45f;
     private const float NodeR = 10f;
+
+    /// <summary>Разбросать точки заново — физика пересобирает картину с чистого листа.</summary>
+    public void Shuffle()
+    {
+        for (int i = 0; i < _nodes.Count; i++)
+        {
+            float r = 40f + 26f * MathF.Sqrt(i);
+            float a = i * 2.39996f + (float)Random.Shared.NextDouble();
+            _nodes[i].Pos = new Vector2(r * MathF.Cos(a), r * MathF.Sin(a));
+            _nodes[i].Vel = Vector2.Zero;
+        }
+        Canvas.Invalidate();
+    }
 
     private List<Route> _routes = new();
     private List<FNode> _nodes = new();
@@ -190,7 +202,7 @@ public sealed partial class ForceGraphView : UserControl
                 var a = _nodes[i]; var b = _nodes[j];
                 var d = a.Pos - b.Pos;
                 float dist2 = MathF.Max(30f * 30f, d.LengthSquared());
-                float f = RepulsionK / dist2;
+                float f = Repulsion / dist2;
                 var push = Vector2.Normalize(d) * f;
                 a.Force += push;
                 b.Force -= push;
@@ -201,7 +213,7 @@ public sealed partial class ForceGraphView : UserControl
         {
             var d = e.B.Pos - e.A.Pos;
             float dist = MathF.Max(1f, d.Length());
-            var f = Vector2.Normalize(d) * (SpringK * (dist - RestLen));
+            var f = Vector2.Normalize(d) * (0.06f * (dist - RestLength));
             e.A.Force += f;
             e.B.Force -= f;
         }
@@ -213,7 +225,7 @@ public sealed partial class ForceGraphView : UserControl
         foreach (var n in _nodes)
         {
             if (n.Pinned) { n.Vel = Vector2.Zero; n.Force = Vector2.Zero; continue; }
-            n.Force += (center - n.Pos) * GravityK;
+            n.Force += (center - n.Pos) * Gravity;
             n.Vel = (n.Vel + n.Force) * Damping;
             if (n.Vel.Length() > MaxSpeed) n.Vel = Vector2.Normalize(n.Vel) * MaxSpeed;
             n.Pos += n.Vel;
@@ -223,13 +235,6 @@ public sealed partial class ForceGraphView : UserControl
 
     // ---------- рендер ----------
 
-    private static readonly Color EdgeColor = Color.FromArgb(255, 154, 167, 199);
-    private static readonly Color Accent = Color.FromArgb(255, 79, 107, 237);
-    private static readonly Color AccentDark = Color.FromArgb(255, 43, 74, 203);
-    private static readonly Color UpdateColor = Color.FromArgb(255, 247, 99, 12);
-    private static readonly Color ErrorRed = Color.FromArgb(255, 196, 43, 28);
-    private static readonly Color TextGray = Color.FromArgb(255, 110, 115, 130);
-    private static readonly Color ConservedGray = Color.FromArgb(255, 140, 155, 185);
 
     private void OnCreateResources(CanvasControl sender, CanvasCreateResourcesEventArgs args)
         => _fmtLabel ??= new CanvasTextFormat { FontSize = 10, FontFamily = "Segoe UI", WordWrapping = CanvasWordWrapping.NoWrap };
@@ -237,19 +242,31 @@ public sealed partial class ForceGraphView : UserControl
     private bool IsEdgeActive(FEdge e)
         => e.RouteId == _selectedRouteId || e.A.Hovered || e.B.Hovered;
 
+    private static Color Fade(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
+
+    /// <summary>Есть ли фокус (hover/выбор) — тогда не-соседи затемняются, как в Obsidian.</summary>
+    private bool DimmedMode => _hovered is not null || _dragged is not null
+                              || !string.IsNullOrEmpty(_selectedRouteId);
+
+    private bool IsNodeActive(FNode n) => n.Hovered || ReferenceEquals(n, _dragged)
+                                         || (_selectedRouteId is not null && n.RouteIds.Contains(_selectedRouteId));
+
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
     {
         var ds = args.DrawingSession;
-        ds.Clear(Color.FromArgb(255, 250, 251, 253));
+        ds.Clear(AppTheme.Bg);
         ds.Transform = Matrix3x2.CreateScale(_zoom) * Matrix3x2.CreateTranslation(_pan);
+
+        bool dimmed = DimmedMode;
 
         // рёбра
         foreach (var e in _edges)
         {
             bool active = IsEdgeActive(e);
-            var color = active ? Accent
-                      : e.Conserved ? Color.FromArgb(120, ConservedGray.R, ConservedGray.G, ConservedGray.B)
-                      : EdgeColor;
+            var color = active ? AppTheme.Accent
+                      : e.Conserved ? Fade(AppTheme.ConservedBr, 120)
+                      : AppTheme.EdgeColor;
+            if (dimmed && !active) color = Fade(color, 40);
             float w = active ? 2.5f : 1.25f;
             if (e.Conserved && !active)
             {
@@ -262,12 +279,22 @@ public sealed partial class ForceGraphView : UserControl
                 ds.DrawLine(e.A.Pos, e.B.Pos, color, w);
             }
 
+            // стрелка направления у целевой точки
+            var dir = e.B.Pos - e.A.Pos;
+            float len = MathF.Max(1f, dir.Length());
+            dir /= len;
+            float rB = (e.B.IsSource ? NodeR + 3 : NodeR) + 2;
+            var tip = e.B.Pos - dir * rB;
+            var perp = new Vector2(-dir.Y, dir.X) * 4.5f;
+            ds.DrawLine(tip, tip - dir * 9 + perp, color, w);
+            ds.DrawLine(tip, tip - dir * 9 - perp, color, w);
+
             // подпись маршрута на рёбрах выбранного/наведённого
             if (active && !string.IsNullOrEmpty(e.RouteName))
             {
                 var mid = (e.A.Pos + e.B.Pos) / 2;
                 using var layout = new CanvasTextLayout(Canvas, Shorten(e.RouteName, 24), _fmtLabel!, 220, 0);
-                ds.DrawTextLayout(layout, mid.X - (float)layout.DrawBounds.Width / 2, mid.Y - 16, AccentDark);
+                ds.DrawTextLayout(layout, mid.X - (float)layout.DrawBounds.Width / 2, mid.Y - 16, AppTheme.AccentDark);
             }
         }
 
@@ -275,25 +302,32 @@ public sealed partial class ForceGraphView : UserControl
         foreach (var n in _nodes)
         {
             float r = n.IsSource ? NodeR + 3 : NodeR;
-            var fill = n.Missing ? ErrorRed
-                     : n.IsSource ? Accent
+            var fill = n.Missing ? AppTheme.ErrorRed
+                     : n.IsSource ? AppTheme.Accent
                      : Color.FromArgb(255, 255, 255, 255);
-            var border = n.Missing ? ErrorRed
-                       : n.IsSource ? AccentDark
-                       : ConservedGray;
+            var border = n.Missing ? AppTheme.ErrorRed
+                       : n.IsSource ? AppTheme.AccentDark
+                       : AppTheme.ConservedBr;
 
             if (n.Hovered) r += 2;
+            if (dimmed && !IsNodeActive(n))
+            {
+                fill = Fade(fill, 45);
+                border = Fade(border, 45);
+            }
             ds.FillCircle(n.Pos, r, fill);
             ds.DrawCircle(n.Pos, r, border, n.Hovered ? 2.5f : 1.5f);
 
-            if (n.HasUpdates) ds.DrawCircle(n.Pos, r + 3.5f, UpdateColor, 2.5f);
+            if (n.HasUpdates) ds.DrawCircle(n.Pos, r + 3.5f, AppTheme.UpdateColor, 2.5f);
             if (n.RouteIds.Contains(_selectedRouteId))
-                ds.DrawCircle(n.Pos, r + 7f, Color.FromArgb(90, Accent.R, Accent.G, Accent.B), 2f);
+                ds.DrawCircle(n.Pos, r + 7f, Color.FromArgb(90, AppTheme.Accent.R, AppTheme.Accent.G, AppTheme.Accent.B), 2f);
 
+            var labelColor = n.IsSource ? AppTheme.AccentDark : AppTheme.TextGray;
+            if (dimmed && !IsNodeActive(n)) labelColor = Fade(labelColor, 45);
             using var lbl = new CanvasTextLayout(Canvas, Shorten(System.IO.Path.GetFileName(n.Path.TrimEnd('\\')), 24),
                                                  _fmtLabel!, 220, 0);
             float lx = n.Pos.X - (float)lbl.DrawBounds.Width / 2;
-            ds.DrawTextLayout(lbl, lx, n.Pos.Y + r + 5, n.IsSource ? AccentDark : TextGray);
+            ds.DrawTextLayout(lbl, lx, n.Pos.Y + r + 5, labelColor);
         }
     }
 

@@ -31,6 +31,7 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        AppTheme.Load(); // тема из settings.json — до создания окна
         var window = new MainWindow();
         window.Activate();
 

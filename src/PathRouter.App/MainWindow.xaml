@@ -5,7 +5,7 @@
     xmlns:local="using:PathRouter.App"
     Title="Караван">
 
-    <Grid>
+    <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
@@ -19,7 +19,7 @@
             </Grid.ColumnDefinitions>
 
         <!-- ===== Левая панель ===== -->
-        <Grid Grid.Column="0" Background="#F3F4F8">
+        <Grid x:Name="LeftPanel" Grid.Column="0" Background="#F3F4F8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
@@ -189,7 +189,7 @@
             </Grid>
 
             <!-- Действия с выбранным маршрутом -->
-            <Border Grid.Row="2" Background="#EBEDF4" Padding="10">
+            <Border x:Name="RouteActionsBorder" Grid.Row="2" Background="#EBEDF4" Padding="10">
                 <ContentControl x:Name="RouteActions" IsEnabled="False">
                     <StackPanel Spacing="6">
                         <TextBlock x:Name="SelectedRouteTitle" Text="Маршрут не выбран" FontSize="12" FontWeight="SemiBold"
@@ -211,13 +211,29 @@
             </Border>
         </Grid>
 
-        <Rectangle Grid.Column="1" Fill="#D8DBE4" />
+        <Rectangle x:Name="DividerRect" Grid.Column="1" Fill="#D8DBE4" />
 
         <!-- ===== Граф ===== -->
         <Grid Grid.Column="2">
             <local:GraphCanvas x:Name="Graph" />
             <local:ForceGraphView x:Name="ForceGraph" Visibility="Collapsed" />
             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12">
+                <Button Click="OnToggleTheme" AutomationProperties.Name="Переключить тему" ToolTipService.ToolTip="Светлая/тёмная тема">
+                    <FontIcon Glyph="&#xE708;" FontSize="14" />
+                </Button>
+                <Button AutomationProperties.Name="Физика графа" ToolTipService.ToolTip="Настройки физики силового вида">
+                    <FontIcon Glyph="&#xE90F;" FontSize="14" />
+                    <Button.Flyout>
+                        <Flyout>
+                            <StackPanel Spacing="10" Width="250">
+                                <Slider x:Name="PhysRepel" Header="Отталкивание точек" ValueChanged="OnPhysicsChanged" />
+                                <Slider x:Name="PhysLink" Header="Длина связи" ValueChanged="OnPhysicsChanged" />
+                                <Slider x:Name="PhysGravity" Header="Гравитация к центру" ValueChanged="OnPhysicsChanged" />
+                                <Button Content="Перемешать заново" Click="OnShuffleForce" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
                 <Button x:Name="ViewToggleButton" Click="OnToggleView" AutomationProperties.Name="Переключить вид графа"
                         ToolTipService.ToolTip="Переключить вид графа">
                     <StackPanel Orientation="Horizontal" Spacing="6">
