@@ -39,6 +39,10 @@ try {
     Get-Process -Name "Караван" -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Milliseconds 500
 
+    # RID-specific restore проекта (без него publish -r падает с NETSDK1047,
+    # а держать RuntimeIdentifiers в csproj нельзя — ломается standalone-apphost)
+    dotnet restore src\PathRouter.App -r win-x64 -p:Platform=x64
+
     Write-Host "== publish (self-contained win-x64) ==" -ForegroundColor Cyan
     dotnet publish src\PathRouter.App -c Release -r win-x64 --self-contained `
         -p:Platform=x64 -o $Output --no-restore

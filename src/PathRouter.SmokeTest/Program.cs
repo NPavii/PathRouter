@@ -238,6 +238,17 @@ try
     repo.DeleteRoute(rc.Id);
     File.WriteAllText(Path.Combine(source, "b.txt"), "v1"); // вернуть как было
 
+    // --- Заметки к ветвям ---
+    var rn = svc.CreateRoute(new[] { source }, "Заметки", dest1);
+    var dn = rn.Destinations[0];
+    repo.SetDestinationNote(dn.Id, "проверка заметки");
+    Check(repo.GetRoutes(true, true).First(r => r.Id == rn.Id).Destinations[0].Note == "проверка заметки",
+        "SetDestinationNote: заметка сохранилась");
+    repo.SetDestinationNote(dn.Id, "   ");
+    Check(repo.GetRoutes(true, true).First(r => r.Id == rn.Id).Destinations[0].Note is null,
+        "SetDestinationNote: пустая заметка удаляется");
+    repo.DeleteRoute(rn.Id);
+
     // --- Конфликт «обе стороны правили» ---
     var rf = svc.CreateRoute(new[] { source }, "Конфликты", dest1);
     File.WriteAllText(Path.Combine(source, "b.txt"), "изменено в источнике");

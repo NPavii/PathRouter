@@ -214,6 +214,42 @@ public sealed partial class MainWindow
             : $"Ветвь «{route.Name} → {dest.DestPath}» вскрыта: проверка возобновлена.");
     }
 
+    /// <summary>Заметка к ветви: многострочный текст, иконка ✎ на узле, hover — всплывающий просмотр.</summary>
+    private async void OnNoteEditRequested(Route route, RouteDestination dest)
+    {
+        var box = new TextBox
+        {
+            Text = dest.Note ?? string.Empty,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            Height = 150,
+            Width = 380,
+            PlaceholderText = "Например: «сюда класть только релизные версии, договорились с Ивановым»…"
+        };
+        var dialog = new ContentDialog
+        {
+            Title = $"Заметка к назначению «{route.Name}»",
+            Content = box,
+            PrimaryButtonText = "Сохранить",
+            SecondaryButtonText = "Удалить заметку",
+            CloseButtonText = "Отмена",
+            XamlRoot = Content.XamlRoot,
+            DefaultButton = ContentDialogButton.Primary
+        };
+        box.SelectAll();
+        var result = await dialog.ShowAsync();
+
+        string? note = dest.Note;
+        if (result == ContentDialogResult.Primary) note = box.Text.Trim();
+        else if (result == ContentDialogResult.Secondary) note = null;
+        else return; // отмена
+
+        dest.Note = string.IsNullOrWhiteSpace(note) ? null : note;
+        _repo.SetDestinationNote(dest.Id, dest.Note);
+        LoadRoutes();
+        Status(dest.Note is not null ? "Заметка сохранена. Наведите курсор на ✎ на узле, чтобы прочитать." : "Заметка удалена.");
+    }
+
     private async void OnMergeRoutes(object sender, RoutedEventArgs e)
     {
         var selected = SelectedRoutes;

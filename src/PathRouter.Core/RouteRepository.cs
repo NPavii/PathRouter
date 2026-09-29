@@ -76,6 +76,7 @@ public sealed class RouteRepository : IDisposable
         AddColumnIfMissing("routes", "group_name", "ALTER TABLE routes ADD COLUMN group_name TEXT");
         AddColumnIfMissing("routes", "is_collapsed", "ALTER TABLE routes ADD COLUMN is_collapsed INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing("destinations", "is_conserved", "ALTER TABLE destinations ADD COLUMN is_conserved INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing("destinations", "note", "ALTER TABLE destinations ADD COLUMN note TEXT");
     }
 
     private bool HasColumn(string table, string column)
@@ -336,6 +337,17 @@ public sealed class RouteRepository : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Заметка к ветви: произвольный текст пользователя. Пустая строка/null — удалить.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SetDestinationNote(string destinationId, string? note)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "UPDATE destinations SET note=$n WHERE id=$id;";
+        cmd.Parameters.AddWithValue("$n", string.IsNullOrWhiteSpace(note) ? DBNull.Value : note.Trim());
+        cmd.Parameters.AddWithValue("$id", destinationId);
+        cmd.ExecuteNonQuery();
+    }
+
     /// <summary>Сброс WAL-журнала в основной файл — перед копированием БД (экспорт).</summary>
     [MethodImpl(MethodImplOptions.Synchronized)]
     public void Checkpoint()
@@ -427,7 +439,7 @@ public sealed class RouteRepository : IDisposable
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
-            SELECT id, route_id, dest_path, order_index, created_utc, last_sync_utc, is_conserved
+            SELECT id, route_id, dest_path, order_index, created_utc, last_sync_utc, is_conserved, note
             FROM destinations WHERE route_id=$rid ORDER BY order_index, created_utc;
             """;
         cmd.Parameters.AddWithValue("$rid", routeId);
@@ -444,7 +456,8 @@ public sealed class RouteRepository : IDisposable
                 OrderIndex = (int)reader.GetInt64(3),
                 CreatedUtc = DateTime.Parse(reader.GetString(4)),
                 LastSyncUtc = DateTime.Parse(reader.GetString(5)),
-                IsConserved = reader.GetInt64(6) != 0
+                IsConserved = reader.GetInt64(6) != 0,
+                Note = reader.IsDBNull(7) ? null : reader.GetString(7)
             });
         }
 

@@ -81,6 +81,9 @@ public sealed class RouteDestination
 
     public bool HasConflicts => Conflicts.Count > 0;
 
+    /// <summary>Заметка пользователя к этой ветви (произвольный текст, показывается по наведению).</summary>
+    public string? Note { get; set; }
+
     /// <summary>Требуется синхронизация: изменился источник или получатель (или исходник пропал).</summary>
     public bool HasUpdates => Diff?.Changed == true || DestDiff?.Changed == true;
 }

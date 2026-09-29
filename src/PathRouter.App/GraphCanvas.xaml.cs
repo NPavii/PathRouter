@@ -15,7 +15,7 @@ namespace PathRouter.App;
 /// <summary>Интерактивный граф маршрутов: панорама, зум, выбор, бейджи обновлений.</summary>
 public sealed partial class GraphCanvas : UserControl
 {
-    private enum NodeKind { Source, Name, Dest, UpdateBadge, RouteToggle, GroupToggle }
+    private enum NodeKind { Source, Name, Dest, UpdateBadge, RouteToggle, GroupToggle, NoteIcon }
 
     private sealed record NodeHit(Rect Rect, Route Route, RouteDestination? Dest, NodeKind Kind, string? GroupName = null);
 
@@ -44,6 +44,7 @@ public sealed partial class GraphCanvas : UserControl
     public event Action<Route>? RouteCollapseToggled;
     public event Action<string>? GroupCollapseToggled;
     public event Action<Route, RouteDestination>? ConservationToggled;
+    public event Action<Route, RouteDestination>? NoteEditRequested;
 
     /// <summary>Свёрнутость путей (group_name -> collapsed), задаётся извне после загрузки маршрутов.</summary>
     private IReadOnlyDictionary<string, bool> _collapsedGroups =
@@ -557,6 +558,7 @@ public sealed partial class GraphCanvas : UserControl
                 ds.DrawTextLayout(Text("❆ в консервации — проверка отключена", _fmtBadge!, DestW - 24), DestX + 26, dy + 32,
                                   WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 140, 158, 195) : Color.FromArgb(255, 120, 140, 175), alpha));
                 _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
+                DrawNoteIcon(ds, route, dest, dy, alpha);
                 DrawEdge(ds, NameX + NameW, nameCy + 6, DestX, cy, alpha);
                 continue;
             }
@@ -604,6 +606,7 @@ public sealed partial class GraphCanvas : UserControl
                                   DestX + DestW - 152, dy + 2, WithAlpha(Color.FromArgb(255, 43, 74, 203), alpha));
             }
             _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
+            DrawNoteIcon(ds, route, dest, dy, alpha);
 
             // ребро имя -> назначение
             DrawEdge(ds, NameX + NameW, nameCy + 6, DestX, cy, alpha);
@@ -622,6 +625,34 @@ public sealed partial class GraphCanvas : UserControl
             }
         }
     }
+
+    /// <summary>Иконка заметки в правом нижнем углу узла назначения. Клик/ПКМ — редактировать.</summary>
+    private void DrawNoteIcon(CanvasDrawingSession ds, Route route, RouteDestination dest, float dy, byte alpha)
+    {
+        if (string.IsNullOrWhiteSpace(dest.Note)) return;
+        ds.DrawTextLayout(Text("✎", _fmtBadge!, 18), DestX + DestW - 19, dy + NodeH - 21,
+                          WithAlpha(AppTheme.UpdateColor, alpha));
+        // хит добавляем ПОСЛЕ destRect — чтобы иконка перехватывала клик раньше узла
+        _hits.Add(new NodeHit(new Rect(DestX + DestW - 22, dy + NodeH - 22, 18, 18), route, dest, NodeKind.NoteIcon));
+    }
+
+    // ---------- hover-подсказка заметки ----------
+
+    private void ShowNoteTooltip(string note, Rect worldRect)
+    {
+        NoteTooltipText.Text = note;
+        double x = worldRect.Right * _zoom + _pan.X + 8;
+        double y = worldRect.Bottom * _zoom + _pan.Y + 6;
+        NoteTooltip.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var w = NoteTooltip.DesiredSize;
+        if (x + w.Width > Canvas.ActualWidth) x = worldRect.Left * _zoom + _pan.X - w.Width - 8;
+        if (y + w.Height > Canvas.ActualHeight) y = Canvas.ActualHeight - w.Height - 6;
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(NoteTooltip, Math.Max(4, x));
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(NoteTooltip, Math.Max(4, y));
+        NoteTooltip.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+    }
+
+    private void HideNoteTooltip() => NoteTooltip.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
 
     private static void DrawEdge(CanvasDrawingSession ds, float x1, float y1, float x2, float y2, byte alpha)
     {
@@ -674,6 +705,9 @@ public sealed partial class GraphCanvas : UserControl
                 case NodeKind.GroupToggle:
                     GroupCollapseToggled?.Invoke(hit.GroupName ?? string.Empty);
                     break;
+                case NodeKind.NoteIcon:
+                    if (hit.Dest is not null) NoteEditRequested?.Invoke(hit.Route, hit.Dest);
+                    break;
                 default:
                     SelectedRoute = hit.Route;
                     RouteSelected?.Invoke(hit.Route);
@@ -717,11 +751,24 @@ public sealed partial class GraphCanvas : UserControl
             Canvas.Invalidate();
             return;
         }
-        if (!_isPanning) return;
-        _pan = new Vector2((float)(_pan.X + pos.X - _lastPointer.X), (float)(_pan.Y + pos.Y - _lastPointer.Y));
-        _lastPointer = pos;
-        Canvas.Invalidate();
+        if (_isPanning)
+        {
+            HideNoteTooltip();
+            _pan = new Vector2((float)(_pan.X + pos.X - _lastPointer.X), (float)(_pan.Y + pos.Y - _lastPointer.Y));
+            _lastPointer = pos;
+            Canvas.Invalidate();
+            return;
+        }
+
+        // hover над иконкой заметки — показываем всплывающий текст
+        var hover = HitTest(pos);
+        if (hover?.Kind == NodeKind.NoteIcon && hover.Dest?.Note is { Length: > 0 } note)
+            ShowNoteTooltip(note, hover.Rect);
+        else
+            HideNoteTooltip();
     }
+
+    private void OnPointerExited(object sender, PointerRoutedEventArgs e) => HideNoteTooltip();
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
@@ -786,6 +833,14 @@ public sealed partial class GraphCanvas : UserControl
         var route = hit.Route;
         var dest = hit.Dest;
         var flyout = new MenuFlyout();
+        var noteItem = new MenuFlyoutItem
+        {
+            Text = "📝 Заметка…",
+            Icon = new FontIcon { Glyph = "\uE70B" }
+        };
+        noteItem.Click += (_, _) => NoteEditRequested?.Invoke(route, dest);
+        flyout.Items.Add(noteItem);
+        flyout.Items.Add(new MenuFlyoutSeparator());
         var item = new MenuFlyoutItem
         {
             Text = dest.IsConserved ? "Вскрыть — возобновить проверку" : "Законсервировать — не проверять",

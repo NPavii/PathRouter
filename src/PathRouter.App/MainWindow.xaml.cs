@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
         Graph.RouteCollapseToggled += OnGraphRouteCollapse;
         Graph.GroupCollapseToggled += name => ToggleGroup(name);
         Graph.ConservationToggled += OnToggleConservation;
+        Graph.NoteEditRequested += OnNoteEditRequested;
         Graph.LayoutChanged += (key, y) =>
         {
             _repo.SaveLayoutPosition(key, y);
