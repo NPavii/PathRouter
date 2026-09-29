@@ -330,6 +330,19 @@ try
     var after = repo.GetRoutes(true, true).ToDictionary(r => r.Id);
     Check(after[r1.Id].GroupName is null && after[r2.Id].GroupName is null, "Ungroup: маршруты вышли из пути");
     Check(repo.GetGroups().All(g => g.Name != "Путь А"), "Ungroup: пустой путь удалён из справочника");
+
+    // --- Переименование пути: маршруты, свёрнутость и раскладка переезжают ---
+    repo.SetGroup(new[] { r1.Id, r2.Id }, "Путь А");
+    repo.SetGroupCollapsed("Путь А", true);
+    repo.SaveLayoutPosition("G:Путь А", 321);
+    repo.RenameGroup("Путь А", "Путь Б");
+    var afterRename = repo.GetRoutes(true, true).ToDictionary(r => r.Id);
+    Check(afterRename[r1.Id].GroupName == "Путь Б" && afterRename[r2.Id].GroupName == "Путь Б",
+        "RenameGroup: маршруты перенесены");
+    Check(repo.GetGroups().Any(g => g.Name == "Путь Б" && g.IsCollapsed), "RenameGroup: состояние свёрнутости сохранилось");
+    Check(repo.GetLayout().TryGetValue("G:Путь Б", out var ny) && Math.Abs(ny - 321) < 0.01,
+        "RenameGroup: позиция раскладки переехала");
+    repo.Ungroup(new[] { r1.Id, r2.Id });
     repo.DeleteRoute(r1.Id); repo.DeleteRoute(r2.Id); repo.DeleteRoute(r3.Id);
 
     // --- Экспорт/импорт: валидация файла базы ---

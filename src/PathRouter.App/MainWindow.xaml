@@ -93,6 +93,8 @@
                             <MenuFlyoutItem x:Name="MergeMenuItem" Text="Объединить выбранные в путь…" Click="OnMergeRoutes" />
                             <MenuFlyoutSeparator />
                             <MenuFlyoutItem x:Name="CollapseRouteItem" Text="Свернуть маршрут" Click="OnToggleRouteCollapse" />
+                            <MenuFlyoutItem x:Name="RenameGroupItem" Text="Переименовать путь…" Click="OnRenameGroupMenu" />
+                            <MenuFlyoutSeparator />
                             <MenuFlyoutItem x:Name="CollapseGroupItem" Text="Свернуть путь" Click="OnToggleGroupCollapse" />
                             <MenuFlyoutSeparator />
                             <MenuFlyoutItem x:Name="UngroupItem" Text="Убрать из пути" Click="OnUngroupSelected" />
@@ -109,13 +111,16 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <FontIcon Grid.Column="0" Glyph="&#xE8FD;" FontSize="12" Foreground="#4F6BED" Margin="0,0,6,0" />
                                         <TextBlock Grid.Column="1" Text="{Binding Key}" FontWeight="SemiBold" FontSize="13"
                                                    Foreground="#2B4ACB" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                        <Button Grid.Column="2" Content="{Binding IsCollapsed, Converter={StaticResource CollapseText}}"
-                                                FontSize="11" Padding="6,2" Margin="6,0,0,0" Click="OnGroupHeaderCollapse" />
-                                        <Button Grid.Column="3" Content="✕" FontSize="11" Padding="6,2" Margin="2,0,0,0"
+                                        <Button Grid.Column="2" Content="✎" FontSize="11" Padding="6,2" Margin="6,0,0,0"
+                                                ToolTipService.ToolTip="Переименовать путь" Click="OnGroupHeaderRename" />
+                                        <Button Grid.Column="3" Content="{Binding IsCollapsed, Converter={StaticResource CollapseText}}"
+                                                FontSize="11" Padding="6,2" Margin="2,0,0,0" Click="OnGroupHeaderCollapse" />
+                                        <Button Grid.Column="4" Content="✕" FontSize="11" Padding="6,2" Margin="2,0,0,0"
                                                 ToolTipService.ToolTip="Разгруппировать маршруты" Click="OnGroupHeaderUngroup" />
                                     </Grid>
                                 </DataTemplate>

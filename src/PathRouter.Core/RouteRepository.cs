@@ -255,6 +255,27 @@ public sealed class RouteRepository : IDisposable
         CleanupEmptyGroups();
     }
 
+    /// <summary>Переименовать путь: переносит маршруты, состояние свёрнутости и раскладку.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void RenameGroup(string oldName, string newName)
+    {
+        if (string.Equals(oldName, newName, StringComparison.OrdinalIgnoreCase)) return;
+        using var tx = _connection.BeginTransaction();
+        void Exec(string sql)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = sql;
+            cmd.Parameters.AddWithValue("$new", newName);
+            cmd.Parameters.AddWithValue("$old", oldName);
+            cmd.ExecuteNonQuery();
+        }
+        Exec("UPDATE routes SET group_name=$new WHERE group_name=$old;");
+        Exec("UPDATE route_groups SET name=$new WHERE name=$old;");
+        Exec("UPDATE layout SET block_key='G:' || $new WHERE block_key='G:' || $old;");
+        tx.Commit();
+    }
+
     /// <summary>Убирает маршруты из путей (group_name = NULL).</summary>
     [MethodImpl(MethodImplOptions.Synchronized)]
     public void Ungroup(IEnumerable<string> routeIds)

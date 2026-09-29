@@ -91,6 +91,10 @@ public sealed partial class GraphCanvas : UserControl
     private float _dragDeltaY;
     private bool _blockDragging;
 
+    /// <summary>Назначения, которые являются источником других видимых блоков: путь -> число маршрутов.</summary>
+    private IReadOnlyDictionary<string, int> _feederCounts =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
     private static string BlockKey(Route r) =>
         string.IsNullOrEmpty(r.GroupName) ? "S:" + SourceKey(r) : "G:" + r.GroupName;
 
@@ -248,12 +252,81 @@ public sealed partial class GraphCanvas : UserControl
             for (float gy = 0; gy < contentH; gy += 40)
                 ds.FillCircle(gx, gy, 1.2f, GridDot);
 
+        // --- цепочки синхронизации: назначение, которое является источником другого блока ---
+        // (Б = назначение А и источник Б→В: файлы текут транзитом; рисуем дугу Б -> блок Б)
+        var srcBlocks = new Dictionary<string, (float SrcCy, Block Block)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (b, by) in positions)
+        {
+            if (b.IsPath) continue; // v1: цепи между незагруппированными блоками
+            srcBlocks[SourceKey(b.Members[0])] = (by + b.H / 2, b);
+        }
+        var feeders = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (b, by) in positions)
+        {
+            if (b.IsPath) continue;
+            foreach (var (dest, _) in DestNodePositions(b.Members, by))
+            {
+                var key = dest.DestPath.TrimEnd('\\');
+                if (srcBlocks.ContainsKey(key))
+                    feeders[key] = feeders.TryGetValue(key, out var c) ? c + 1 : 1;
+            }
+        }
+        _feederCounts = feeders;
+
+        // --- рисуем цепные дуги под узлами ---
+        foreach (var (b, by) in positions)
+        {
+            if (b.IsPath) continue;
+            foreach (var (dest, cy) in DestNodePositions(b.Members, by))
+            {
+                if (!srcBlocks.TryGetValue(dest.DestPath.TrimEnd('\\'), out var target)) continue;
+                DrawChainEdge(ds, DestX + DestW + 2, cy, SourceX - 6, target.SrcCy);
+            }
+        }
+
         // --- рисуем блоки и запоминаем их зоны для drag&drop ---
         foreach (var (b, by) in positions)
         {
             DrawBlock(ds, b, by);
             _blockRects.Add((new Rect(SourceX - 16, by, DestX + DestW + 32 - SourceX, b.H), b.Key));
         }
+    }
+
+    /// <summary>Позиции узлов назначений блока — та же математика, что в DrawGroup.</summary>
+    private static IEnumerable<(RouteDestination Dest, float Cy)> DestNodePositions(List<Route> group, float blockY)
+    {
+        float h = GroupHeight(group);
+        float totalStacks = group.Sum(RouteStackH) + (group.Count - 1) * RoutePad;
+        float stackY = blockY + (h - totalStacks) / 2;
+        foreach (var route in group)
+        {
+            float stackH = RouteStackH(route);
+            float nameCy = stackY + stackH / 2;
+            if (route.Destinations.Count > 0)
+            {
+                float destTop = nameCy - (route.Destinations.Count * DestRowH) / 2 + DestRowH / 2;
+                for (int i = 0; i < route.Destinations.Count; i++)
+                    yield return (route.Destinations[i], destTop + i * DestRowH);
+            }
+            stackY += stackH + RoutePad;
+        }
+    }
+
+    /// <summary>Пунктирная дуга цепочки: от узла назначения к блоку, где эта папка — источник.</summary>
+    private static void DrawChainEdge(CanvasDrawingSession ds, float x1, float y1, float x2, float y2)
+    {
+        var color = Color.FromArgb(200, 79, 107, 237);
+        using var dash = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle
+            { DashStyle = Microsoft.Graphics.Canvas.Geometry.CanvasDashStyle.Dash };
+        using var path = new Microsoft.Graphics.Canvas.Geometry.CanvasPathBuilder(ds);
+        path.BeginFigure(x1, y1);
+        float mx = x1 + 70;
+        path.AddCubicBezier(new Vector2(mx, y1), new Vector2(mx, y2), new Vector2(x2, y2));
+        path.EndFigure(Microsoft.Graphics.Canvas.Geometry.CanvasFigureLoop.Open);
+        using var geo = Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreatePath(path);
+        ds.DrawGeometry(geo, color, 1.5f, dash);
+        ds.DrawLine(x2, y2, x2 + 8, y2 - 4, color, 1.5f);
+        ds.DrawLine(x2, y2, x2 + 8, y2 + 4, color, 1.5f);
     }
 
     private void DrawBlock(CanvasDrawingSession ds, Block b, float y)
@@ -482,6 +555,12 @@ public sealed partial class GraphCanvas : UserControl
                 stateColor = Color.FromArgb(255, 60, 160, 90);
             }
             ds.DrawTextLayout(Text(state, _fmtBadge!, DestW - 24), DestX + 26, dy + 32, WithAlpha(stateColor, alpha));
+            // метка цепочки: эта папка — источник других маршрутов (файлы текут дальше)
+            if (_feederCounts.TryGetValue(dest.DestPath.TrimEnd('\\'), out var feed))
+            {
+                ds.DrawTextLayout(Text($"⛓ источник ещё {feed} маршр.", _fmtBadge!, 150),
+                                  DestX + DestW - 152, dy + 2, WithAlpha(Color.FromArgb(255, 43, 74, 203), alpha));
+            }
             _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
 
             // ребро имя -> назначение

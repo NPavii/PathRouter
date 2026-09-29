@@ -171,6 +171,7 @@ public sealed partial class MainWindow
         CollapseRouteItem.IsEnabled = single is not null;
         CollapseRouteItem.Text = single?.IsCollapsed == true ? "Развернуть маршрут" : "Свернуть маршрут";
         var inGroup = selected.Where(r => r.GroupName is not null).ToList();
+        RenameGroupItem.IsEnabled = inGroup.Count > 0;
         CollapseGroupItem.IsEnabled = inGroup.Count > 0;
         CollapseGroupItem.Text = inGroup.Any(r => GroupCollapsed(r.GroupName!)) ? "Развернуть путь" : "Свернуть путь";
         UngroupItem.IsEnabled = inGroup.Count > 0;
@@ -270,6 +271,46 @@ public sealed partial class MainWindow
     {
         if ((sender as FrameworkElement)?.DataContext is RouteGroupView g && !string.IsNullOrEmpty(g.Key))
             ToggleGroup(g.Key);
+    }
+
+    private void OnGroupHeaderRename(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is RouteGroupView g && !string.IsNullOrEmpty(g.Key))
+            _ = RenameGroupAsync(g.Key);
+    }
+
+    private void OnRenameGroupMenu(object sender, RoutedEventArgs e)
+    {
+        var name = SelectedRoutes.FirstOrDefault(r => r.GroupName is not null)?.GroupName;
+        if (name is not null) _ = RenameGroupAsync(name);
+    }
+
+    /// <summary>Переименовать путь: переносит маршруты, состояние и раскладку.</summary>
+    private async Task RenameGroupAsync(string oldName)
+    {
+        var box = new TextBox { Text = oldName, Width = 320 };
+        var dialog = new ContentDialog
+        {
+            Title = "Переименовать путь",
+            Content = box,
+            PrimaryButtonText = "Сохранить",
+            CloseButtonText = "Отмена",
+            XamlRoot = Content.XamlRoot,
+            DefaultButton = ContentDialogButton.Primary
+        };
+        box.SelectAll();
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var newName = box.Text.Trim();
+        if (newName.Length == 0 || string.Equals(newName, oldName, StringComparison.Ordinal)) return;
+        if (_repo.GetGroups().Any(g => string.Equals(g.Name, newName, StringComparison.OrdinalIgnoreCase)))
+        {
+            ShowError(new InvalidOperationException($"Путь «{newName}» уже существует — выберите другое имя."));
+            return;
+        }
+        _repo.RenameGroup(oldName, newName);
+        LoadRoutes();
+        Status($"Путь «{oldName}» переименован в «{newName}».");
     }
 
     private void OnGroupHeaderUngroup(object sender, RoutedEventArgs e)
