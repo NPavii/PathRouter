@@ -152,6 +152,7 @@ public sealed partial class MainWindow
         // Ctrl+ПКМ — добавить/убрать из выделения (галочки Multiple тоже работают)
         var keyState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
         bool ctrl = (keyState & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        if (ctrl)
         {
             if (RoutesList.SelectedItems.Contains(r)) RoutesList.SelectedItems.Remove(r);
             else RoutesList.SelectedItems.Add(r);

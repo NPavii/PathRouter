@@ -319,7 +319,7 @@ public sealed partial class ForceGraphView : UserControl
             ds.DrawCircle(n.Pos, r, border, n.Hovered ? 2.5f : 1.5f);
 
             if (n.HasUpdates) ds.DrawCircle(n.Pos, r + 3.5f, AppTheme.UpdateColor, 2.5f);
-            if (n.RouteIds.Contains(_selectedRouteId))
+            if (_selectedRouteId is not null && n.RouteIds.Contains(_selectedRouteId))
                 ds.DrawCircle(n.Pos, r + 7f, Color.FromArgb(90, AppTheme.Accent.R, AppTheme.Accent.G, AppTheme.Accent.B), 2f);
 
             var labelColor = n.IsSource ? AppTheme.AccentDark : AppTheme.TextGray;
@@ -415,7 +415,7 @@ public sealed partial class ForceGraphView : UserControl
             if (!moved)
             {
                 var route = _routes.FirstOrDefault(r => _dragged.RouteIds.Contains(r.Id));
-                RouteSelected?.Invoke(route);
+                if (route is not null) RouteSelected?.Invoke(route);
             }
             NodeMoved?.Invoke(_dragged.Id, _dragged.Pos.X, _dragged.Pos.Y);
             _isDraggingNode = false;

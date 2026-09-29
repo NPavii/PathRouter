@@ -6,7 +6,9 @@ out/
 *.suo
 .vs/
 
-# --- Готовые сборки (пересобираются dotnet publish) ---
+# --- Готовые сборки ---
+# deploy.ps1 собирает standalone в publish/ (.NET Runtime не требуется)
+publish/
 dist/
 dist-preview/
 
