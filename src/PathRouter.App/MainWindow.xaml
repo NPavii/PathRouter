@@ -86,6 +86,7 @@
                 </StackPanel>
                 <Grid Grid.Row="4">
                     <ListView x:Name="RoutesList" SelectionMode="Multiple" RightTapped="OnRoutesRightTapped"
+                              AllowDrop="True" DragOver="OnRoutesDragOver" Drop="OnRoutesDrop"
                               SelectionChanged="OnRouteSelectionChanged">
                     <ListView.ContextFlyout>
                         <MenuFlyout x:Name="RouteContextMenu" Opening="OnRouteMenuOpening">

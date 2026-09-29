@@ -456,6 +456,11 @@ public sealed partial class GraphCanvas : UserControl
                 state = $"синхр. {dest.LastSyncUtc.ToLocalTime():dd.MM.yyyy HH:mm}";
                 stateColor = TextGray;
             }
+            else if (dest.HasConflicts)
+            {
+                state = $"⚠ конфликт: {dest.Conflicts.Count} файл(а) правились с обеих сторон";
+                stateColor = ErrorRed;
+            }
             else if (dest.Diff.SourceMissing)
             {
                 state = "источник не найден";

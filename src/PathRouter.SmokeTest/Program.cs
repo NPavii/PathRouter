@@ -238,6 +238,32 @@ try
     repo.DeleteRoute(rc.Id);
     File.WriteAllText(Path.Combine(source, "b.txt"), "v1"); // вернуть как было
 
+    // --- Конфликт «обе стороны правили» ---
+    var rf = svc.CreateRoute(new[] { source }, "Конфликты", dest1);
+    File.WriteAllText(Path.Combine(source, "b.txt"), "изменено в источнике");
+    File.WriteAllText(Path.Combine(dest1, "b.txt"), "изменено в получателе");
+    svc.CheckRoute(rf);
+    Check(rf.Destinations[0].Conflicts.Contains("b.txt"), "конфликт «обе стороны правили» детектится");
+
+    // согласие к одному содержимому — не конфликт
+    File.WriteAllText(Path.Combine(source, "new.txt"), "одинаково");
+    File.WriteAllText(Path.Combine(dest1, "new.txt"), "одинаково");
+    svc.CheckRoute(rf);
+    Check(!rf.Destinations[0].Conflicts.Contains("new.txt"),
+        "одинаковые правки с обеих сторон — согласие, не конфликт");
+
+    svc.UpdateDestination(rf, rf.Destinations[0]);
+    Check(File.ReadAllText(Path.Combine(dest1, "b.txt")) == "изменено в источнике",
+        "при конфликте ветвь приводится к состоянию источника");
+    var backupFile = Directory.GetFiles(dest1, "b.конфликт-*.txt");
+    Check(backupFile.Length == 1 && File.ReadAllText(backupFile[0]) == "изменено в получателе",
+        "версия получателя сохранена как копия «.конфликт-ДАТА»");
+    Check(rf.Destinations[0].Conflicts.Count == 0, "после разрешения список конфликтов пуст");
+    svc.CheckRoute(rf);
+    Check(!rf.HasUpdates, "после разрешения конфликтов ветвь актуальна");
+    repo.DeleteRoute(rf.Id);
+    File.WriteAllText(Path.Combine(source, "b.txt"), "v1"); // вернуть как было
+
     // --- Контентный хэш: mtime не влияет, содержимое — да ---
     var chFile = Path.Combine(source, "ch.txt");
     File.WriteAllText(chFile, "содержимое");

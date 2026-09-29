@@ -131,6 +131,28 @@ public sealed class RouteService
     {
         if (dest.IsConserved)
             throw new InvalidOperationException("Ветвь в консервации — синхронизация отключена. Сначала «Вскрыть».");
+
+        // Конфликт «обе стороны правили»: версия получателя сохраняется как копия «*.конфликт-ДАТА»,
+        // затем ветвь приводится к состоянию источника как обычно.
+        if (dest.Conflicts.Count > 0 && Directory.Exists(dest.DestPath))
+        {
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            foreach (var rel in dest.Conflicts)
+            {
+                var current = Path.Combine(dest.DestPath, rel);
+                if (!File.Exists(current)) continue; // получатель удалил свой вариант — сохранять нечего
+                var backup = Path.Combine(dest.DestPath,
+                    Path.GetDirectoryName(rel) ?? string.Empty,
+                    Path.GetFileNameWithoutExtension(rel) + ".конфликт-" + stamp + Path.GetExtension(rel));
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                    File.Copy(current, backup, overwrite: false);
+                }
+                catch { /* не смогли сохранить копию — не блокируем синхронизацию */ }
+            }
+        }
+
         var scan = FileScanner.ScanDirectory(route.SourcePath);
         if (scan is not null)
         {
@@ -143,6 +165,7 @@ public sealed class RouteService
         // после синхронизации обе стороны актуальны (если источник найден)
         dest.Diff = FileScanner.Compare(scan, dest.Manifest);
         dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(FileScanner.ScanDirectory(dest.DestPath), dest.Manifest);
+        dest.Conflicts = new List<string>();
         return dest.Diff;
     }
 
@@ -158,10 +181,13 @@ public sealed class RouteService
             {
                 dest.Diff = null;
                 dest.DestDiff = null;
+                dest.Conflicts = new List<string>();
                 continue;
             }
             dest.Diff = FileScanner.Compare(scan, dest.Manifest);
-            dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(Scan(dest.DestPath), dest.Manifest);
+            var destScan = scan is null ? null : Scan(dest.DestPath);
+            dest.DestDiff = scan is null ? null : FileScanner.CompareOwned(destScan, dest.Manifest);
+            dest.Conflicts = FileScanner.FindConflicts(scan, destScan, dest.Manifest);
             merged.Added = Math.Max(merged.Added, dest.Diff.Added);
             merged.Modified = Math.Max(merged.Modified, dest.Diff.Modified);
             merged.Deleted = Math.Max(merged.Deleted, dest.Diff.Deleted);

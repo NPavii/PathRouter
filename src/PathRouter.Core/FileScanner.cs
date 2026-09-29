@@ -112,9 +112,48 @@ public static class FileScanner
     }
 
     /// <summary>
-    /// Двусторонняя проверка «своих» файлов в папке назначения: маршрут отвечает только
+    /// Файлы, которые изменились в источнике И в получателе одновременно (относительно манифеста)
+    /// придя к РАЗНОМУ содержимому. Если обе стороны пришли к одинаковому содержимому —
+    /// это согласие, а не конфликт. Удаление с одной стороны + правка с другой — конфликт.
+    /// </summary>
+    public static List<string> FindConflicts(List<FileEntry>? sourceScan, List<FileEntry>? destScan, List<FileEntry>? manifest)
+    {
+        var conflicts = new List<string>();
+        if (sourceScan is null || destScan is null || manifest is null) return conflicts;
+
+        var srcBy = sourceScan.ToDictionary(f => f.RelPath, f => f);
+        var dstBy = destScan.ToDictionary(f => f.RelPath, f => f);
+
+        // файлы из манифеста: обе стороны ушли от снапшота
+        foreach (var man in manifest)
+        {
+            bool srcChanged = !srcBy.TryGetValue(man.RelPath, out var s) || s.Hash != man.Hash;
+            bool dstChanged = !dstBy.TryGetValue(man.RelPath, out var d) || d.Hash != man.Hash;
+            if (!srcChanged || !dstChanged) continue;
+            if (s is null && d is null) continue;             // обе удалили — согласие
+            if (s is not null && d is not null && s.Hash == d.Hash) continue; // сошлись к одному — согласие
+            conflicts.Add(man.RelPath);
+        }
+
+        // новые файлы с разным содержимым с обеих сторон (их не было в манифесте)
+        var manPaths = manifest.ToDictionary(f => f.RelPath, f => f);
+        foreach (var (path, s) in srcBy)
+        {
+            if (manPaths.ContainsKey(path)) continue;
+            if (dstBy.TryGetValue(path, out var d) && d.Hash != s.Hash)
+                conflicts.Add(path);
+        }
+
+        conflicts.Sort(StringComparer.Ordinal);
+        return conflicts;
+    }
     /// за то, что сам положил (манифест). Чужие файлы в папке игнорируются — они не появляются
     /// в диффе и не удаляются при синхронизации.
+    /// Deleted — наши файлы, которых в получателе больше нет; Modified — наши файлы перезаписали.
+    /// </summary>
+    /// <summary>
+    /// Двусторонняя проверка «своих» файлов в папке назначения: маршрут отвечает только
+    /// за то, что сам положил (манифест). Чужие файлы в папке игнорируются.
     /// Deleted — наши файлы, которых в получателе больше нет; Modified — наши файлы перезаписали.
     /// </summary>
     public static DiffResult CompareOwned(List<FileEntry>? current, List<FileEntry>? manifest)

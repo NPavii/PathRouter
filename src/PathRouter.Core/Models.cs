@@ -76,6 +76,11 @@ public sealed class RouteDestination
     /// <summary>Консервация: проверка целостности и синхронизация этой ветви отключены.</summary>
     public bool IsConserved { get; set; }
 
+    /// <summary>Файлы, которые изменились в источнике И в получателе одновременно (относительно манифеста).</summary>
+    public List<string> Conflicts { get; set; } = new();
+
+    public bool HasConflicts => Conflicts.Count > 0;
+
     /// <summary>Требуется синхронизация: изменился источник или получатель (или исходник пропал).</summary>
     public bool HasUpdates => Diff?.Changed == true || DestDiff?.Changed == true;
 }
