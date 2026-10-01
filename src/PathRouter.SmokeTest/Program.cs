@@ -306,11 +306,15 @@ try
     }
     finally { svc.EndPass(); }
 
-    // --- Раскладка графа ---
-    repo.SaveLayoutPosition("G:Путь А", 500);
+    // --- Раскладка графа (свободная: X и Y) ---
+    repo.SaveLayoutPosition("G:Путь А", 120, 500);
     var lay = repo.GetLayout();
-    Check(lay.TryGetValue("G:Путь А", out var yy) && Math.Abs(yy - 500) < 0.01,
-        "SaveLayoutPosition/GetLayout roundtrip");
+    Check(lay.TryGetValue("G:Путь А", out var posA)
+          && posA.X is { } xa && Math.Abs(xa - 120) < 0.01 && Math.Abs(posA.Y - 500) < 0.01,
+        "SaveLayoutPosition/GetLayout roundtrip (X и Y)");
+    repo.SaveLayoutPosition("G:Путь Б", null, 40);
+    Check(repo.GetLayout().TryGetValue("G:Путь Б", out var posB) && posB.X is null && Math.Abs(posB.Y - 40) < 0.01,
+        "SaveLayoutPosition: x=null — авто-колонка");
 
     // --- Позиции силового графа ---
     repo.SaveForceLayout("F:D:\\test", 12.5, -30);
@@ -345,13 +349,13 @@ try
     // --- Переименование пути: маршруты, свёрнутость и раскладка переезжают ---
     repo.SetGroup(new[] { r1.Id, r2.Id }, "Путь А");
     repo.SetGroupCollapsed("Путь А", true);
-    repo.SaveLayoutPosition("G:Путь А", 321);
-    repo.RenameGroup("Путь А", "Путь Б");
+    repo.SaveLayoutPosition("G:Путь А", 222, 321);
+    repo.RenameGroup("Путь А", "Путь В");
     var afterRename = repo.GetRoutes(true, true).ToDictionary(r => r.Id);
-    Check(afterRename[r1.Id].GroupName == "Путь Б" && afterRename[r2.Id].GroupName == "Путь Б",
+    Check(afterRename[r1.Id].GroupName == "Путь В" && afterRename[r2.Id].GroupName == "Путь В",
         "RenameGroup: маршруты перенесены");
-    Check(repo.GetGroups().Any(g => g.Name == "Путь Б" && g.IsCollapsed), "RenameGroup: состояние свёрнутости сохранилось");
-    Check(repo.GetLayout().TryGetValue("G:Путь Б", out var ny) && Math.Abs(ny - 321) < 0.01,
+    Check(repo.GetGroups().Any(g => g.Name == "Путь В" && g.IsCollapsed), "RenameGroup: состояние свёрнутости сохранилось");
+    Check(repo.GetLayout().TryGetValue("G:Путь В", out var rnPos) && Math.Abs(rnPos.Y - 321) < 0.01,
         "RenameGroup: позиция раскладки переехала");
     repo.Ungroup(new[] { r1.Id, r2.Id });
     repo.DeleteRoute(r1.Id); repo.DeleteRoute(r2.Id); repo.DeleteRoute(r3.Id);

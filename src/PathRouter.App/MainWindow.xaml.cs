@@ -38,6 +38,9 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "Караван";
+        // Тему применяем по Loaded: RequestedTheme, заданный до загрузки визуального дерева,
+        // у части контролов не применяется — отсюда «белая панель при старте в тёмной теме».
+        RootGrid.Loaded += (_, _) => ApplyTheme();
 
         _repo = new RouteRepository();
         _svc = new RouteService(_repo);
@@ -49,10 +52,10 @@ public sealed partial class MainWindow : Window
         Graph.GroupCollapseToggled += name => ToggleGroup(name);
         Graph.ConservationToggled += OnToggleConservation;
         Graph.NoteEditRequested += OnNoteEditRequested;
-        Graph.LayoutChanged += (key, y) =>
+        Graph.LayoutChanged += (key, x, y) =>
         {
-            _repo.SaveLayoutPosition(key, y);
-            Status("Раскладка сохранена. Перетаскивайте блоки за пустое место, чтобы навести порядок.");
+            _repo.SaveLayoutPosition(key, x, y);
+            Status("Раскладка сохранена: блок останется на месте при следующем открытии.");
         };
 
         ForceGraph.RouteSelected += OnGraphRouteSelected;

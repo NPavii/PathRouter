@@ -59,27 +59,30 @@ public sealed partial class GraphCanvas : UserControl
     private bool GroupCollapsed(string? name) =>
         name is not null && _collapsedGroups.TryGetValue(name, out var c) && c;
 
-    /// <summary>Сохранённые Y-позиции блоков (ручная раскладка пользователя).</summary>
-    private IReadOnlyDictionary<string, double> _layout =
-        new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Сохранённые позиции блоков (ручная раскладка): X (null — авто-колонка) и Y.</summary>
+    private IReadOnlyDictionary<string, (double? X, double Y)> _layout =
+        new Dictionary<string, (double? X, double Y)>(StringComparer.OrdinalIgnoreCase);
 
-    public void SetLayout(IReadOnlyDictionary<string, double> layout)
+    public void SetLayout(IReadOnlyDictionary<string, (double? X, double Y)> layout)
     {
         _layout = layout;
         Canvas.Invalidate();
     }
 
-    public event Action<string, double>? LayoutChanged;
+    public event Action<string, double?, double>? LayoutChanged; // key, x (null=авто), y
 
     // ---------- блоки и ручная раскладка ----------
 
     private sealed record Block(string Key, float H, bool IsPath, bool Collapsed, List<Route> Members);
 
-    private List<(Block Block, float Y)>? _drawnBlocks;      // позиции последнего кадра
+    private List<(Block Block, float X, float Y)>? _drawnBlocks;      // позиции последнего кадра
     private readonly List<(Rect Rect, string Key)> _blockRects = new(); // зоны захвата блоков
     private string? _dragBlockKey;
-    private float _dragDeltaY;
+    private float _dragDeltaY, _dragDeltaX;
     private bool _blockDragging;
+
+    /// <summary>Горизонтальное смещение рисуемого блока (ручная раскладка: X свободен, Y с уплотнением).</summary>
+    private float _xo;
 
     /// <summary>Назначения, которые являются источником других видимых блоков: путь -> число маршрутов.</summary>
     private IReadOnlyDictionary<string, int> _feederCounts =
@@ -130,8 +133,9 @@ public sealed partial class GraphCanvas : UserControl
     /// <summary>Подгоняет масштаб так, чтобы вся ширина графа помещалась в канвас.</summary>
     private void TryFitToContent()
     {
+        _xo = 0; // contentW считаем по чистым константам
         if (_fitDone || Canvas.ActualWidth <= 0 || _routes.Count == 0) return;
-        float contentW = DestX + DestW + 90;
+        float contentW = (DestX + _xo) + DestW + 90;
         float z = Math.Clamp((float)(Canvas.ActualWidth - 16) / contentW, 0.05f, 1.0f);
         _zoom = z;
         _pan = new Vector2(8, 8);
@@ -197,6 +201,7 @@ public sealed partial class GraphCanvas : UserControl
         var ds = args.DrawingSession;
         ds.Clear(AppTheme.Bg);
         ds.Transform = Matrix3x2.CreateScale(_zoom) * Matrix3x2.CreateTranslation(_pan);
+        _xo = 0; // смещение блока действует только внутри DrawBlock
 
         _hits.Clear();
         _blockRects.Clear();
@@ -226,14 +231,19 @@ public sealed partial class GraphCanvas : UserControl
         blocks = OrderByChains(blocks);
 
         // --- назначаем Y: сохранённая позиция пользователя, с уплотнением (без наложений) ---
-        var positions = new List<(Block Block, float Y)>();
+        var positions = new List<(Block Block, float X, float Y)>();
         float y = 40;
         foreach (var b in blocks)
         {
             float by = y;
-            if (_layout.TryGetValue(b.Key, out var saved)) by = Math.Max((float)saved, y);
-            if (b.Key == _dragBlockKey) by += _dragDeltaY; // живой перенос за курсором
-            positions.Add((b, by));
+            float bx = (SourceX + _xo) - 16; // авто-колонка
+            if (_layout.TryGetValue(b.Key, out var saved))
+            {
+                by = Math.Max((float)saved.Y, y);   // вертикально — с уплотнением (без наложений)
+                if (saved.X.HasValue) bx = Math.Max(0, (float)saved.X.Value); // горизонтально — свободно
+            }
+            if (b.Key == _dragBlockKey) { bx += _dragDeltaX; by += _dragDeltaY; } // живой перенос за курсором
+            positions.Add((b, bx, by));
             y = by + b.H + BlockPad;
         }
         _drawnBlocks = positions;
@@ -242,23 +252,23 @@ public sealed partial class GraphCanvas : UserControl
         float contentH = positions.Count > 0
             ? positions[^1].Y + positions[^1].Block.H + 40
             : 80;
-        for (float gx = 0; gx < DestX + DestW + 120; gx += 40)
+        for (float gx = 0; gx < (DestX + _xo) + DestW + 120; gx += 40)
             for (float gy = 0; gy < contentH; gy += 40)
                 ds.FillCircle(gx, gy, 1.2f, AppTheme.GridDot);
 
         // --- цепочки синхронизации: назначение, которое является источником другого блока ---
         // (Б = назначение А и источник Б→В: файлы текут транзитом; рисуем дугу Б -> блок Б)
-        var srcBlocks = new Dictionary<string, (float SrcCy, Block Block)>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (b, by) in positions)
+        var srcBlocks = new Dictionary<string, (float SrcX, float SrcCy, Block Block)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (b, bx, by) in positions)
         {
             if (b.IsPath) continue; // v1: цепи между незагруппированными блоками
-            srcBlocks[SourceKey(b.Members[0])] = (by + b.H / 2, b);
+            srcBlocks[SourceKey(b.Members[0])] = (bx + SourceX, by + b.H / 2, b);
         }
         var feeders = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (b, by) in positions)
+        foreach (var (b, bx, by) in positions)
         {
             if (b.IsPath) continue;
-            foreach (var (dest, _) in DestNodePositions(b.Members, by))
+            foreach (var (dest, _) in DestNodePositions(b.Members, bx, by))
             {
                 var key = dest.DestPath.TrimEnd('\\');
                 if (srcBlocks.ContainsKey(key))
@@ -267,22 +277,22 @@ public sealed partial class GraphCanvas : UserControl
         }
         _feederCounts = feeders;
 
-        // --- рисуем цепные дуги под узлами ---
-        foreach (var (b, by) in positions)
+        // --- рисуем цепные дуги под узлами (динамически — от текущих позиций блоков) ---
+        foreach (var (b, bx, by) in positions)
         {
             if (b.IsPath) continue;
-            foreach (var (dest, cy) in DestNodePositions(b.Members, by))
+            foreach (var (dest, cy) in DestNodePositions(b.Members, bx, by))
             {
                 if (!srcBlocks.TryGetValue(dest.DestPath.TrimEnd('\\'), out var target)) continue;
-                DrawChainEdge(ds, DestX + DestW + 2, cy, SourceX - 6, target.SrcCy);
+                DrawChainEdge(ds, bx + DestX + DestW + 2, cy, target.SrcX - 6, target.SrcCy);
             }
         }
 
         // --- рисуем блоки и запоминаем их зоны для drag&drop ---
-        foreach (var (b, by) in positions)
+        foreach (var (b, bx, by) in positions)
         {
-            DrawBlock(ds, b, by);
-            _blockRects.Add((new Rect(SourceX - 16, by, DestX + DestW + 32 - SourceX, b.H), b.Key));
+            DrawBlock(ds, b, bx, by);
+            _blockRects.Add((new Rect(bx, by, DestX + DestW + 32 - SourceX, b.H), b.Key));
         }
     }
 
@@ -336,7 +346,7 @@ public sealed partial class GraphCanvas : UserControl
     }
 
     /// <summary>Позиции узлов назначений блока — та же математика, что в DrawGroup.</summary>
-    private static IEnumerable<(RouteDestination Dest, float Cy)> DestNodePositions(List<Route> group, float blockY)
+    private static IEnumerable<(RouteDestination Dest, float Cy)> DestNodePositions(List<Route> group, float blockX, float blockY)
     {
         float h = GroupHeight(group);
         float totalStacks = group.Sum(RouteStackH) + (group.Count - 1) * RoutePad;
@@ -372,17 +382,23 @@ public sealed partial class GraphCanvas : UserControl
         ds.DrawLine(x2, y2, x2 + 8, y2 + 4, color, 1.5f);
     }
 
-    private void DrawBlock(CanvasDrawingSession ds, Block b, float y)
+    private void DrawBlock(CanvasDrawingSession ds, Block b, float x, float y)
     {
-        if (b.IsPath)
+        float prev = _xo;
+        _xo = x - (SourceX - 16);
+        try
         {
-            if (b.Collapsed) DrawCollapsedGroup(ds, b.Key[2..], b.Members, y);
-            else DrawPathContour(ds, b.Key[2..], b.Members, y);
+            if (b.IsPath)
+            {
+                if (b.Collapsed) DrawCollapsedGroup(ds, b.Key[2..], b.Members, y);
+                else DrawPathContour(ds, b.Key[2..], b.Members, y);
+            }
+            else
+            {
+                DrawGroup(ds, b.Members, y);
+            }
         }
-        else
-        {
-            DrawGroup(ds, b.Members, y);
-        }
+        finally { _xo = prev; }
     }
 
     /// <summary>Свёрнутый путь: одна компактная плашка с названием и счётчиком.</summary>
@@ -390,14 +406,14 @@ public sealed partial class GraphCanvas : UserControl
     {
         int withUpdates = members.Count(r => r.HasUpdates);
         byte alpha = members.All(r => r.IsArchived) ? (byte)110 : (byte)255;
-        float w = DestX + DestW + 16 - (SourceX - 16);
-        var rect = new Rect(SourceX - 16, y, w, CollapsedGroupH - 14);
+        float w = (DestX + _xo) + DestW + 16 - ((SourceX + _xo) - 16);
+        var rect = new Rect((SourceX + _xo) - 16, y, w, CollapsedGroupH - 14);
 
         ds.FillRoundedRectangle(rect, 12, 12, WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 36, 39, 52) : Color.FromArgb(255, 237, 240, 250), alpha));
         ds.DrawRoundedRectangle(rect, 12, 12, WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 84, 93, 130) : Color.FromArgb(255, 150, 165, 220), alpha), 1.5f);
         string text = $"▸  {Shorten(name, 44)}  —  {members.Count} {(members.Count == 1 ? "маршрут" : "маршрута")}";
         if (withUpdates > 0) text += $"  •  обновлений: {withUpdates}";
-        ds.DrawTextLayout(Text(text, _fmtTitle!, w - 40), SourceX, y + 12,
+        ds.DrawTextLayout(Text(text, _fmtTitle!, w - 40), (SourceX + _xo), y + 12,
                           WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 176, 184, 220) : Color.FromArgb(255, 60, 70, 110), alpha));
         _hits.Add(new NodeHit(rect, members[0], null, NodeKind.GroupToggle, name));
     }
@@ -406,13 +422,13 @@ public sealed partial class GraphCanvas : UserControl
     private void DrawPathContour(CanvasDrawingSession ds, string name, List<Route> members, float y)
     {
         float h = PathGroupHeight(members);
-        float x = SourceX - 16, w = DestX + DestW + 16 - x;
+        float x = (SourceX + _xo) - 16, w = (DestX + _xo) + DestW + 16 - x;
 
         ds.FillRoundedRectangle(new Rect(x, y, w, h), 14, 14, AppTheme.IsDark ? Color.FromArgb(255, 34, 37, 50) : Color.FromArgb(255, 242, 245, 255));
         ds.DrawRoundedRectangle(new Rect(x, y, w, h), 14, 14, AppTheme.Accent, 2f);
 
         // заголовок пути + зона клика для сворачивания
-        ds.DrawTextLayout(Text($"▼  {Shorten(name, 50)}", _fmtTitle!, w - 40), SourceX, y + 8, AppTheme.AccentDark);
+        ds.DrawTextLayout(Text($"▼  {Shorten(name, 50)}", _fmtTitle!, w - 40), (SourceX + _xo), y + 8, AppTheme.AccentDark);
         _hits.Add(new NodeHit(new Rect(x, y, w, GroupTitleH + 2), members[0], null, NodeKind.GroupToggle, name));
 
         float inner = y + PathPad + GroupTitleH;
@@ -459,13 +475,13 @@ public sealed partial class GraphCanvas : UserControl
 
         // --- общий узел-источник ---
         float srcY = blockCenterY - NodeH / 2;
-        var srcRect = new Rect(SourceX, srcY, SourceW, NodeH);
+        var srcRect = new Rect((SourceX + _xo), srcY, SourceW, NodeH);
         ds.FillRoundedRectangle(srcRect, 8, 8, WithAlpha(srcFill, alpha));
         ds.DrawRoundedRectangle(srcRect, 8, 8, WithAlpha(srcBorder, alpha), groupSelected ? 2.5f : 1.5f);
-        ds.DrawTextLayout(Text("📁 " + Shorten(group[0].SourcePath, 38), _fmtPath!, SourceW - 24), SourceX + 12, srcY + 12, WithAlpha(AppTheme.TextGray, alpha));
+        ds.DrawTextLayout(Text("📁 " + Shorten(group[0].SourcePath, 38), _fmtPath!, SourceW - 24), (SourceX + _xo) + 12, srcY + 12, WithAlpha(AppTheme.TextGray, alpha));
         string srcSub = group.Count == 1 ? "1 маршрут" : $"{group.Count} маршрута/маршрутов";
         if (sourceMissing) srcSub = "источник не найден";
-        ds.DrawTextLayout(Text(srcSub, _fmtPath!, SourceW - 24), SourceX + 26, srcY + 30, WithAlpha(sourceMissing ? AppTheme.ErrorRed : AppTheme.TextDark, alpha));
+        ds.DrawTextLayout(Text(srcSub, _fmtPath!, SourceW - 24), (SourceX + _xo) + 26, srcY + 30, WithAlpha(sourceMissing ? AppTheme.ErrorRed : AppTheme.TextDark, alpha));
         _hits.Add(new NodeHit(srcRect, group[0], null, NodeKind.Source));
 
         // --- стеки маршрутов внутри блока ---
@@ -476,7 +492,7 @@ public sealed partial class GraphCanvas : UserControl
         {
             float stackH = RouteStackH(route);
             float nameCy = stackY + stackH / 2;
-            DrawEdge(ds, SourceX + SourceW, blockCenterY, NameX, nameCy, alpha);
+            DrawEdge(ds, (SourceX + _xo) + SourceW, blockCenterY, (NameX + _xo), nameCy, alpha);
             DrawRouteStack(ds, route, nameCy, stackY, stackH, sourceMissing, alpha);
             stackY += stackH + RoutePad;
         }
@@ -492,48 +508,48 @@ public sealed partial class GraphCanvas : UserControl
 
         // --- имя маршрута ---
         float nameY = nameCy - NodeH / 2 - 4;
-        var nameRect = new Rect(NameX, nameY, NameW, NodeH + 8);
+        var nameRect = new Rect((NameX + _xo), nameY, NameW, NodeH + 8);
         ds.FillRoundedRectangle(nameRect, 10, 10, WithAlpha(nameFill, alpha));
         ds.DrawRoundedRectangle(nameRect, 10, 10, WithAlpha(selected ? AppTheme.AccentDark : nameFill, alpha), selected ? 2.5f : 1f);
 
         if (route.IsCollapsed)
         {
-            ds.DrawTextLayout(Text("▸ " + Shorten(route.Name, 26), _fmtTitle!, NameW - 40), NameX + 12, nameY + 12,
+            ds.DrawTextLayout(Text("▸ " + Shorten(route.Name, 26), _fmtTitle!, NameW - 40), (NameX + _xo) + 12, nameY + 12,
                               Color.FromArgb(alpha, 255, 255, 255));
             string sub = sourceMissing ? "источник не найден"
                        : $"свёрнут • {route.Destinations.Count} {(route.Destinations.Count == 1 ? "папка" : "папки")}"
                          + (route.HasUpdates ? " • есть обновления" : "");
-            ds.DrawTextLayout(Text(sub, _fmtBadge!, NameW - 24), NameX + 12, nameY + 34,
+            ds.DrawTextLayout(Text(sub, _fmtBadge!, NameW - 24), (NameX + _xo) + 12, nameY + 34,
                               Color.FromArgb((byte)(alpha == 255 ? 200 : 110), 255, 255, 255));
             _hits.Add(new NodeHit(nameRect, route, null, NodeKind.Name));
 
             // шеврон сворачивания/разворачивания у правого края узла
-            var tgl = new Rect(NameX + NameW - 26, nameY + 10, 22, NodeH - 4);
-            ds.DrawTextLayout(Text("–", _fmtGlyph!, 20), NameX + NameW - 21, nameY + 14,
+            var tgl = new Rect((NameX + _xo) + NameW - 26, nameY + 10, 22, NodeH - 4);
+            ds.DrawTextLayout(Text("–", _fmtGlyph!, 20), (NameX + _xo) + NameW - 21, nameY + 14,
                               Color.FromArgb(alpha, 255, 255, 255));
             _hits.Add(new NodeHit(tgl, route, null, NodeKind.RouteToggle));
             return;
         }
 
-        ds.DrawTextLayout(Text(Shorten(route.Name, 30), _fmtTitle!, NameW - 24), NameX + 12, nameY + 12, Color.FromArgb(alpha, 255, 255, 255));
+        ds.DrawTextLayout(Text(Shorten(route.Name, 30), _fmtTitle!, NameW - 24), (NameX + _xo) + 12, nameY + 12, Color.FromArgb(alpha, 255, 255, 255));
         string sub2 = sourceMissing ? "источник не найден"
                    : route.Destinations.Count == 0 ? "нет ветвей"
                    : $"{route.Destinations.Count} {(route.Destinations.Count == 1 ? "папка" : "папки")}";
         if (!sourceMissing && route.HasUpdates) sub2 += "  •  есть обновления";
-        ds.DrawTextLayout(Text(sub2, _fmtBadge!, NameW - 24), NameX + 12, nameY + 34, Color.FromArgb((byte)(alpha == 255 ? 200 : 110), 255, 255, 255));
+        ds.DrawTextLayout(Text(sub2, _fmtBadge!, NameW - 24), (NameX + _xo) + 12, nameY + 34, Color.FromArgb((byte)(alpha == 255 ? 200 : 110), 255, 255, 255));
         _hits.Add(new NodeHit(nameRect, route, null, NodeKind.Name));
 
         // --- назначения ---
         if (route.Destinations.Count == 0)
         {
             // заглушка «нет ветвей» — серый пунктирный стуб
-            ds.DrawTextLayout(Text("— нет ветвей —", _fmtPath!, 160), DestX, nameCy - 8, WithAlpha(AppTheme.TextGray, alpha));
+            ds.DrawTextLayout(Text("— нет ветвей —", _fmtPath!, 160), (DestX + _xo), nameCy - 8, WithAlpha(AppTheme.TextGray, alpha));
             return;
         }
 
         // шеврон сворачивания маршрута
-        var toggle = new Rect(NameX + NameW - 26, nameY + 10, 22, NodeH - 4);
-        ds.DrawTextLayout(Text("▾", _fmtGlyph!, 20), NameX + NameW - 21, nameY + 14,
+        var toggle = new Rect((NameX + _xo) + NameW - 26, nameY + 10, 22, NodeH - 4);
+        ds.DrawTextLayout(Text("▾", _fmtGlyph!, 20), (NameX + _xo) + NameW - 21, nameY + 14,
                           Color.FromArgb((byte)(alpha == 255 ? 220 : 110), 255, 255, 255));
         _hits.Add(new NodeHit(toggle, route, null, NodeKind.RouteToggle));
 
@@ -543,7 +559,7 @@ public sealed partial class GraphCanvas : UserControl
             var dest = route.Destinations[i];
             float cy = destTop + i * DestRowH;
             float dy = cy - NodeH / 2;
-            var destRect = new Rect(DestX, dy, DestW, NodeH);
+            var destRect = new Rect((DestX + _xo), dy, DestW, NodeH);
 
             if (dest.IsConserved)
             {
@@ -553,19 +569,19 @@ public sealed partial class GraphCanvas : UserControl
                     { DashStyle = Microsoft.Graphics.Canvas.Geometry.CanvasDashStyle.Dash };
                 ds.DrawRoundedRectangle(destRect, 8, 8,
                                         WithAlpha(AppTheme.ConservedBr, alpha), 1.5f, dash);
-                ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12,
+                ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), (DestX + _xo) + 12, dy + 12,
                                   WithAlpha(AppTheme.TextGray, alpha));
-                ds.DrawTextLayout(Text("❆ в консервации — проверка отключена", _fmtBadge!, DestW - 24), DestX + 26, dy + 32,
+                ds.DrawTextLayout(Text("❆ в консервации — проверка отключена", _fmtBadge!, DestW - 24), (DestX + _xo) + 26, dy + 32,
                                   WithAlpha(AppTheme.IsDark ? Color.FromArgb(255, 140, 158, 195) : Color.FromArgb(255, 120, 140, 175), alpha));
                 _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
                 DrawNoteIcon(ds, route, dest, dy, alpha);
-                DrawEdge(ds, NameX + NameW, nameCy + 6, DestX, cy, alpha);
+                DrawEdge(ds, (NameX + _xo) + NameW, nameCy + 6, (DestX + _xo), cy, alpha);
                 continue;
             }
 
             ds.FillRoundedRectangle(destRect, 8, 8, WithAlpha(AppTheme.DestFill, alpha));
             ds.DrawRoundedRectangle(destRect, 8, 8, WithAlpha(AppTheme.DestBorder, alpha), 1.5f);
-            ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), DestX + 12, dy + 12, WithAlpha(AppTheme.TextGray, alpha));
+            ds.DrawTextLayout(Text("📁 " + Shorten(dest.DestPath, 38), _fmtPath!, DestW - 24), (DestX + _xo) + 12, dy + 12, WithAlpha(AppTheme.TextGray, alpha));
             string state;
             Color stateColor;
             if (dest.Diff is null)
@@ -598,18 +614,18 @@ public sealed partial class GraphCanvas : UserControl
                 state = "актуально";
                 stateColor = AppTheme.OkGreen;
             }
-            ds.DrawTextLayout(Text(state, _fmtBadge!, DestW - 24), DestX + 26, dy + 32, WithAlpha(stateColor, alpha));
+            ds.DrawTextLayout(Text(state, _fmtBadge!, DestW - 24), (DestX + _xo) + 26, dy + 32, WithAlpha(stateColor, alpha));
             // метка цепочки: эта папка — источник других маршрутов (файлы текут дальше)
             if (_feederCounts.TryGetValue(dest.DestPath.TrimEnd('\\'), out var feed))
             {
                 ds.DrawTextLayout(Text($"⛓ источник ещё {feed} маршр.", _fmtBadge!, 150),
-                                  DestX + DestW - 152, dy + 2, WithAlpha(Color.FromArgb(255, 43, 74, 203), alpha));
+                                  (DestX + _xo) + DestW - 152, dy + 2, WithAlpha(Color.FromArgb(255, 43, 74, 203), alpha));
             }
             _hits.Add(new NodeHit(destRect, route, dest, NodeKind.Dest));
             DrawNoteIcon(ds, route, dest, dy, alpha);
 
             // ребро имя -> назначение
-            DrawEdge(ds, NameX + NameW, nameCy + 6, DestX, cy, alpha);
+            DrawEdge(ds, (NameX + _xo) + NameW, nameCy + 6, (DestX + _xo), cy, alpha);
 
             // бейдж обновления над назначением: ↻ — изменился источник, ≠ — изменился получатель
             if (dest.HasUpdates)
@@ -617,7 +633,7 @@ public sealed partial class GraphCanvas : UserControl
                 bool sourceSide = dest.Diff?.Changed == true;
                 var badgeColor = sourceSide ? AppTheme.UpdateColor : AppTheme.ErrorRed;
                 string glyph = sourceSide ? "↻" : "≠";
-                float bx = DestX + DestW - 4, by = dy - 4;
+                float bx = (DestX + _xo) + DestW - 4, by = dy - 4;
                 ds.FillCircle(bx, by, 13, WithAlpha(badgeColor, alpha));
                 ds.DrawCircle(bx, by, 13, Color.FromArgb(alpha, 255, 255, 255), 1.5f);
                 ds.DrawTextLayout(Text(glyph, _fmtGlyph!, 20), bx - 6, by - 8, Color.FromArgb(alpha, 255, 255, 255));
@@ -630,10 +646,10 @@ public sealed partial class GraphCanvas : UserControl
     private void DrawNoteIcon(CanvasDrawingSession ds, Route route, RouteDestination dest, float dy, byte alpha)
     {
         if (string.IsNullOrWhiteSpace(dest.Note)) return;
-        ds.DrawTextLayout(Text("✎", _fmtBadge!, 18), DestX + DestW - 19, dy + NodeH - 21,
+        ds.DrawTextLayout(Text("✎", _fmtBadge!, 18), (DestX + _xo) + DestW - 19, dy + NodeH - 21,
                           WithAlpha(AppTheme.UpdateColor, alpha));
         // хит добавляем ПОСЛЕ destRect — чтобы иконка перехватывала клик раньше узла
-        _hits.Add(new NodeHit(new Rect(DestX + DestW - 22, dy + NodeH - 22, 18, 18), route, dest, NodeKind.NoteIcon));
+        _hits.Add(new NodeHit(new Rect((DestX + _xo) + DestW - 22, dy + NodeH - 22, 18, 18), route, dest, NodeKind.NoteIcon));
     }
 
     // ---------- hover-подсказка заметки ----------
@@ -729,6 +745,7 @@ public sealed partial class GraphCanvas : UserControl
                 _blockDragging = true;
                 _dragBlockKey = _blockRects[i].Key;
                 _dragDeltaY = 0;
+                _dragDeltaX = 0;
                 _lastPointer = pos;
                 Canvas.CapturePointer(e.Pointer);
                 Canvas.Invalidate();
@@ -746,7 +763,8 @@ public sealed partial class GraphCanvas : UserControl
         var pos = e.GetCurrentPoint(Canvas).Position;
         if (_blockDragging)
         {
-            _dragDeltaY += (float)((pos.Y - _lastPointer.Y) / _zoom); // мировые единицы
+            _dragDeltaX += (float)((pos.X - _lastPointer.X) / _zoom); // мировые единицы
+            _dragDeltaY += (float)((pos.Y - _lastPointer.Y) / _zoom);
             _lastPointer = pos;
             Canvas.Invalidate();
             return;
@@ -780,10 +798,11 @@ public sealed partial class GraphCanvas : UserControl
                 // запоминаем конечную позицию (с учётом уплотнения она могла слегка съехать)
                 var entry = _drawnBlocks.FirstOrDefault(p => p.Block.Key == _dragBlockKey);
                 if (entry.Block is not null)
-                    LayoutChanged?.Invoke(_dragBlockKey, entry.Y);
+                    LayoutChanged?.Invoke(_dragBlockKey, entry.X, entry.Y);
             }
             _dragBlockKey = null;
             _dragDeltaY = 0;
+            _dragDeltaX = 0;
             Canvas.ReleasePointerCapture(e.Pointer);
             Canvas.Invalidate();
             return;

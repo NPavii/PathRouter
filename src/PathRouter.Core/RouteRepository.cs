@@ -77,6 +77,7 @@ public sealed class RouteRepository : IDisposable
         AddColumnIfMissing("routes", "is_collapsed", "ALTER TABLE routes ADD COLUMN is_collapsed INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing("destinations", "is_conserved", "ALTER TABLE destinations ADD COLUMN is_conserved INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing("destinations", "note", "ALTER TABLE destinations ADD COLUMN note TEXT");
+        AddColumnIfMissing("layout", "x", "ALTER TABLE layout ADD COLUMN x REAL");
     }
 
     private bool HasColumn(string table, string column)
@@ -273,6 +274,7 @@ public sealed class RouteRepository : IDisposable
         }
         Exec("UPDATE routes SET group_name=$new WHERE group_name=$old;");
         Exec("UPDATE route_groups SET name=$new WHERE name=$old;");
+        Exec("DELETE FROM layout WHERE block_key='G:' || $new;"); // на случай коллизии ключей раскладки
         Exec("UPDATE layout SET block_key='G:' || $new WHERE block_key='G:' || $old;");
         tx.Commit();
     }
@@ -359,29 +361,30 @@ public sealed class RouteRepository : IDisposable
 
     // ---------- Раскладка графа ----------
 
-    /// <summary>Сохранённые Y-позиции блоков графа (путь/источник), ключ — block_key.</summary>
+    /// <summary>Сохранённые позиции блоков графа (путь/источник): X (null — авто-колонка) и Y. Ключ — block_key.</summary>
     [MethodImpl(MethodImplOptions.Synchronized)]
-    public Dictionary<string, double> GetLayout()
+    public Dictionary<string, (double? X, double Y)> GetLayout()
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT block_key, y FROM layout;";
-        var dict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        cmd.CommandText = "SELECT block_key, x, y FROM layout;";
+        var dict = new Dictionary<string, (double? X, double Y)>(StringComparer.OrdinalIgnoreCase);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            dict[reader.GetString(0)] = reader.GetDouble(1);
+            dict[reader.GetString(0)] = (reader.IsDBNull(1) ? null : reader.GetDouble(1), reader.GetDouble(2));
         return dict;
     }
 
-    /// <summary>Запомнить вертикальную позицию блока графа (ручная раскладка пользователя).</summary>
+    /// <summary>Запомнить позицию блока графа (ручная раскладка пользователя). x=null — вернуть в авто-колонку.</summary>
     [MethodImpl(MethodImplOptions.Synchronized)]
-    public void SaveLayoutPosition(string blockKey, double y)
+    public void SaveLayoutPosition(string blockKey, double? x, double y)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO layout(block_key, y) VALUES($k, $y)
-            ON CONFLICT(block_key) DO UPDATE SET y=$y;
+            INSERT INTO layout(block_key, x, y) VALUES($k, $x, $y)
+            ON CONFLICT(block_key) DO UPDATE SET x=$x, y=$y;
             """;
         cmd.Parameters.AddWithValue("$k", blockKey);
+        cmd.Parameters.AddWithValue("$x", x.HasValue ? x.Value : DBNull.Value);
         cmd.Parameters.AddWithValue("$y", y);
         cmd.ExecuteNonQuery();
     }
