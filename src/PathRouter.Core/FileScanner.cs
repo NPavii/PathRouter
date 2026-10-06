@@ -37,7 +37,9 @@ public static class FileScanner
                         // Контентный хэш: размер + первые и последние 64 КБ файла.
                         // Не зависит от mtime — перекопированный через архив/почту файл
                         // с тем же содержимым считается тем же.
-                        Hash = ComputeContentHash(file, fi.Length)
+                        // Облачные заглушки (OneDrive/Google «по требованию») не читаем —
+                        // чтение скачало бы файл целиком ради выборки.
+                        Hash = ComputeContentHash(file, fi.Length, fi.LastWriteTimeUtc.Ticks, fi.Attributes)
                     });
                 }
                 catch (Exception) { /* файл недоступен/занят — пропускаем */ }
@@ -54,11 +56,34 @@ public static class FileScanner
         return result;
     }
 
-    /// <summary>Контентный хэш (FNV-1a 64) по размеру + первым/последним 64 КБ файла.</summary>
-    public static string ComputeContentHash(string filePath, long size)
+    /// <summary>
+    /// Контентный хэш (FNV-1a 64) по размеру + первым/последним 64 КБ файла.
+    /// Облачные заглушки (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS / Offline — OneDrive,
+    /// Google Drive, Яндекс.Диск в режиме «по требованию») содержимое не читаем:
+    /// чтение выборки скачало бы весь файл. Для них — хэш-заглушка по метаданным
+    /// с префиксом "meta-": такие файлы считаются изменёнными, только если изменились
+    /// размер или mtime, но облако не «будится».
+    /// </summary>
+    public static string ComputeContentHash(string filePath, long size, long lastWriteTicks = 0, FileAttributes attributes = 0)
     {
+        const uint FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00040000;
+        bool cloudStub = ((uint)attributes & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+                      || attributes.HasFlag(FileAttributes.Offline);
+
         ulong hash = 14695981039346656037UL;
         void Feed(byte b) { hash ^= b; hash *= 1099511628211UL; }
+        void FeedStr(string s) { foreach (var ch in s) Feed((byte)ch); }
+
+        if (cloudStub)
+        {
+            // хэш-заглушка по метаданным: облако не «будится», файл не скачивается
+            FeedStr("meta-");
+            FeedStr(size.ToString());
+            Feed((byte)'|');
+            FeedStr(lastWriteTicks.ToString());
+            return "meta-" + hash.ToString("x16");
+        }
+
         void FeedBytes(byte[] data, int count)
         {
             for (int i = 0; i < count; i++) Feed(data[i]);
