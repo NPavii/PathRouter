@@ -247,6 +247,14 @@ try
     repo.SetDestinationNote(dn.Id, "   ");
     Check(repo.GetRoutes(true, true).First(r => r.Id == rn.Id).Destinations[0].Note is null,
         "SetDestinationNote: пустая заметка удаляется");
+
+    // --- Заметки к источникам (по пути папки) ---
+    repo.SetSourceNote(Path.GetFullPath(source), "эталонная папка");
+    Check(repo.GetSourceNotes().TryGetValue(Path.GetFullPath(source), out var sn) && sn == "эталонная папка",
+        "SetSourceNote: заметка к источнику сохранилась");
+    repo.SetSourceNote(Path.GetFullPath(source), null);
+    Check(!repo.GetSourceNotes().ContainsKey(Path.GetFullPath(source)),
+        "SetSourceNote: заметка к источнику удаляется");
     repo.DeleteRoute(rn.Id);
 
     // --- Конфликт «обе стороны правили» ---

@@ -250,6 +250,47 @@ public sealed partial class MainWindow
         Status(dest.Note is not null ? "Заметка сохранена. Наведите курсор на ✎ на узле, чтобы прочитать." : "Заметка удалена.");
     }
 
+    /// <summary>Заметка к папке-источнику: общая для всех маршрутов этого источника.</summary>
+    private async void OnSourceNoteEditRequested(string sourcePath)
+    {
+        var notes = _repo.GetSourceNotes();
+        var current = notes.TryGetValue(sourcePath.TrimEnd('\\'), out var t) ? t : string.Empty;
+        var box = new TextBox
+        {
+            Text = current,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            Height = 150,
+            Width = 380,
+            PlaceholderText = "Например: «эталонная папка — правки только через инженера»…"
+        };
+        var dialog = new ContentDialog
+        {
+            Title = "Заметка к источнику",
+            Content = new StackPanel { Spacing = 8 }.Also(p =>
+            {
+                p.Children.Add(new TextBlock { Text = sourcePath, FontSize = 11, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 130, 135, 150)), TextTrimming = TextTrimming.CharacterEllipsis });
+                p.Children.Add(box);
+            }),
+            PrimaryButtonText = "Сохранить",
+            SecondaryButtonText = "Удалить заметку",
+            CloseButtonText = "Отмена",
+            XamlRoot = Content.XamlRoot,
+            DefaultButton = ContentDialogButton.Primary
+        };
+        box.SelectAll();
+        var result = await dialog.ShowAsync();
+
+        string? note = current;
+        if (result == ContentDialogResult.Primary) note = box.Text.Trim();
+        else if (result == ContentDialogResult.Secondary) note = null;
+        else return;
+
+        _repo.SetSourceNote(sourcePath, note);
+        LoadRoutes();
+        Status(note is not null ? "Заметка к источнику сохранена." : "Заметка к источнику удалена.");
+    }
+
     private async void OnMergeRoutes(object sender, RoutedEventArgs e)
     {
         var selected = SelectedRoutes;

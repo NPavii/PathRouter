@@ -15,7 +15,7 @@ namespace PathRouter.App;
 /// <summary>Интерактивный граф маршрутов: панорама, зум, выбор, бейджи обновлений.</summary>
 public sealed partial class GraphCanvas : UserControl
 {
-    private enum NodeKind { Source, Name, Dest, UpdateBadge, RouteToggle, GroupToggle, NoteIcon }
+    private enum NodeKind { Source, Name, Dest, UpdateBadge, RouteToggle, GroupToggle, NoteIcon, SourceNoteIcon }
 
     private sealed record NodeHit(Rect Rect, Route Route, RouteDestination? Dest, NodeKind Kind, string? GroupName = null);
 
@@ -45,6 +45,7 @@ public sealed partial class GraphCanvas : UserControl
     public event Action<string>? GroupCollapseToggled;
     public event Action<Route, RouteDestination>? ConservationToggled;
     public event Action<Route, RouteDestination>? NoteEditRequested;
+    public event Action<string>? SourceNoteEditRequested; // путь папки-источника
 
     /// <summary>Свёрнутость путей (group_name -> collapsed), задаётся извне после загрузки маршрутов.</summary>
     private IReadOnlyDictionary<string, bool> _collapsedGroups =
@@ -83,6 +84,16 @@ public sealed partial class GraphCanvas : UserControl
 
     /// <summary>Горизонтальное смещение рисуемого блока (ручная раскладка: X свободен, Y с уплотнением).</summary>
     private float _xo;
+
+    /// <summary>Заметки к папкам-источникам: нормализованный путь -> текст.</summary>
+    private IReadOnlyDictionary<string, string> _sourceNotes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    public void SetSourceNotes(IReadOnlyDictionary<string, string> notes)
+    {
+        _sourceNotes = notes;
+        Canvas.Invalidate();
+    }
 
     /// <summary>Назначения, которые являются источником других видимых блоков: путь -> число маршрутов.</summary>
     private IReadOnlyDictionary<string, int> _feederCounts =
@@ -483,6 +494,14 @@ public sealed partial class GraphCanvas : UserControl
         if (sourceMissing) srcSub = "источник не найден";
         ds.DrawTextLayout(Text(srcSub, _fmtPath!, SourceW - 24), (SourceX + _xo) + 26, srcY + 30, WithAlpha(sourceMissing ? AppTheme.ErrorRed : AppTheme.TextDark, alpha));
         _hits.Add(new NodeHit(srcRect, group[0], null, NodeKind.Source));
+        // иконка заметки к источнику — общая для всех маршрутов блока (ключ — путь папки)
+        if (_sourceNotes.TryGetValue(SourceKey(group[0]), out var srcNote) && srcNote.Length > 0)
+        {
+            ds.DrawTextLayout(Text("✎", _fmtBadge!, 18), (SourceX + _xo) + SourceW - 19, srcY + NodeH - 21,
+                              WithAlpha(AppTheme.UpdateColor, alpha));
+            _hits.Add(new NodeHit(new Rect((SourceX + _xo) + SourceW - 22, srcY + NodeH - 22, 18, 18),
+                                  group[0], null, NodeKind.SourceNoteIcon));
+        }
 
         // --- стеки маршрутов внутри блока ---
         float totalStacks = group.Sum(RouteStackH) + (group.Count - 1) * RoutePad;
@@ -724,6 +743,9 @@ public sealed partial class GraphCanvas : UserControl
                 case NodeKind.NoteIcon:
                     if (hit.Dest is not null) NoteEditRequested?.Invoke(hit.Route, hit.Dest);
                     break;
+                case NodeKind.SourceNoteIcon:
+                    SourceNoteEditRequested?.Invoke(hit.Route.SourcePath);
+                    break;
                 default:
                     SelectedRoute = hit.Route;
                     RouteSelected?.Invoke(hit.Route);
@@ -782,6 +804,9 @@ public sealed partial class GraphCanvas : UserControl
         var hover = HitTest(pos);
         if (hover?.Kind == NodeKind.NoteIcon && hover.Dest?.Note is { Length: > 0 } note)
             ShowNoteTooltip(note, hover.Rect);
+        else if (hover?.Kind == NodeKind.SourceNoteIcon
+                 && _sourceNotes.TryGetValue(SourceKey(hover.Route), out var srcNote))
+            ShowNoteTooltip(srcNote, hover.Rect);
         else
             HideNoteTooltip();
     }
@@ -843,11 +868,29 @@ public sealed partial class GraphCanvas : UserControl
         if (path is not null) FolderOpenRequested?.Invoke(path);
     }
 
-    /// <summary>ПКМ по ветви назначения — консервация/вскрытие (без проверки целостности).</summary>
+    /// <summary>ПКМ по узлу — заметка (источник) либо заметка/консервация (назначение).</summary>
     private void OnRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         var hit = HitTest(e.GetPosition(Canvas));
-        if (hit?.Kind != NodeKind.Dest || hit.Dest is null) return;
+        if (hit is null) return;
+
+        if (hit.Kind == NodeKind.Source)
+        {
+            var path = hit.Route.SourcePath;
+            var srcFlyout = new MenuFlyout();
+            var srcItem = new MenuFlyoutItem
+            {
+                Text = "📝 Заметка к источнику…",
+                Icon = new FontIcon { Glyph = "" }
+            };
+            srcItem.Click += (_, _) => SourceNoteEditRequested?.Invoke(path);
+            srcFlyout.Items.Add(srcItem);
+            srcFlyout.ShowAt(Canvas, e.GetPosition(Canvas));
+            e.Handled = true;
+            return;
+        }
+
+        if (hit.Kind != NodeKind.Dest || hit.Dest is null) return;
 
         var route = hit.Route;
         var dest = hit.Dest;

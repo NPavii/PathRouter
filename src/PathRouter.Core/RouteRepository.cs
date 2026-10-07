@@ -64,6 +64,10 @@ public sealed class RouteRepository : IDisposable
                 block_key TEXT PRIMARY KEY,
                 y REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS source_notes(
+                path TEXT PRIMARY KEY,
+                note TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS force_layout(
                 node_id TEXT PRIMARY KEY,
                 x REAL NOT NULL,
@@ -347,6 +351,43 @@ public sealed class RouteRepository : IDisposable
         cmd.CommandText = "UPDATE destinations SET note=$n WHERE id=$id;";
         cmd.Parameters.AddWithValue("$n", string.IsNullOrWhiteSpace(note) ? DBNull.Value : note.Trim());
         cmd.Parameters.AddWithValue("$id", destinationId);
+        cmd.ExecuteNonQuery();
+    }
+
+    // ---------- Заметки к источникам ----------
+
+    /// <summary>Все заметки к папкам-источникам: нормализованный путь -> текст.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public Dictionary<string, string> GetSourceNotes()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT path, note FROM source_notes;";
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            dict[reader.GetString(0)] = reader.GetString(1);
+        return dict;
+    }
+
+    /// <summary>Заметка к папке-источнику. Пустая строка/null — удалить.</summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    public void SetSourceNote(string sourcePath, string? note)
+    {
+        if (string.IsNullOrWhiteSpace(note))
+        {
+            using var del = _connection.CreateCommand();
+            del.CommandText = "DELETE FROM source_notes WHERE path=$p;";
+            del.Parameters.AddWithValue("$p", sourcePath.TrimEnd('\\'));
+            del.ExecuteNonQuery();
+            return;
+        }
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO source_notes(path, note) VALUES($p, $n)
+            ON CONFLICT(path) DO UPDATE SET note=$n;
+            """;
+        cmd.Parameters.AddWithValue("$p", sourcePath.TrimEnd('\\'));
+        cmd.Parameters.AddWithValue("$n", note.Trim());
         cmd.ExecuteNonQuery();
     }
 

@@ -52,6 +52,7 @@ public sealed partial class MainWindow : Window
         Graph.GroupCollapseToggled += name => ToggleGroup(name);
         Graph.ConservationToggled += OnToggleConservation;
         Graph.NoteEditRequested += OnNoteEditRequested;
+        Graph.SourceNoteEditRequested += OnSourceNoteEditRequested;
         Graph.LayoutChanged += (key, x, y) =>
         {
             _repo.SaveLayoutPosition(key, x, y);
@@ -134,6 +135,7 @@ public sealed partial class MainWindow : Window
             .ToDictionary(g => g.Name, g => g.IsCollapsed, StringComparer.OrdinalIgnoreCase);
         Graph.SetGroupStates(groupStates);
         Graph.SetLayout(_repo.GetLayout());
+        Graph.SetSourceNotes(_repo.GetSourceNotes());
 
         // Группировка списка: пути — с заголовками, развёрнутые показывают маршруты,
         // свёрнутые показывают только заголовок; без пути — каждый маршрут отдельно.
